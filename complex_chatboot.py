@@ -14,7 +14,10 @@ llm = init_chat_model("groq:llama3-70b-8192")
 class MessageClassifier(BaseModel):
     message_type: Literal["emotional", "logical"] = Field(
         ...,
-        description="Classify if the message requires an emotional (therapist) or logical response.",
+        description=(
+            "Classify if the message requires an emotional (therapist) "
+            + "or logical response."
+        ),
     )
 
 
@@ -103,6 +106,7 @@ graph_builder.add_node("therapist", therapist_agent)
 graph_builder.add_node("logical", logical_agent)
 
 graph_builder.add_edge(START, "classifier")
+
 graph_builder.add_edge("classifier", "router")
 
 graph_builder.add_conditional_edges(
