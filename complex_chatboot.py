@@ -12,6 +12,14 @@ llm = init_chat_model("groq:llama3-70b-8192")
 
 
 class MessageClassifier(BaseModel):
+    """Model to classify messages as emotional or logical.
+
+    Attributes:
+        message_type (Literal["emotional", "logical"]): The type of message,
+            either 'emotional' for therapy-related messages or 'logical' for
+            fact-based inquiries.
+    """
+
     message_type: Literal["emotional", "logical"] = Field(
         ...,
         description=(
@@ -22,11 +30,37 @@ class MessageClassifier(BaseModel):
 
 
 class State(TypedDict):
+    """State for the graph, containing the messages and message type.
+    Attributes:
+        messages (list):
+            A list of messages in the conversation.
+        message_type (str | None):
+            The type of the last message, either 'emotional'
+            or 'logical'. This is determined by the classifier.
+    """
+
     messages: Annotated[list, add_messages]
     message_type: str | None
 
 
-def classify_message(state: State):
+def classify_message(state: State) -> dict:
+    """Classify the last user message as emotional or logical.
+
+    This function uses a structured output model to determine
+    whether the last message is emotional (requiring therapy) or logical
+    (requiring factual information).
+
+    Args:
+        state (State):
+            The current state of the conversation, containing messages.
+
+    Returns:
+        dict:
+            A dictionary containing the message type, either 'emotional'
+            or 'logical'. This classification is used to route the conversation
+            to the appropriate agent (therapist or logical assistant).
+    """
+
     last_message = state["messages"][-1]
     classifier_llm = llm.with_structured_output(MessageClassifier)
 
@@ -49,6 +83,24 @@ def classify_message(state: State):
 
 
 def router(state: State):
+    """Route the conversation based on the message type.
+
+    This function checks the message type determined by the classifier and
+    routes the conversation to either the therapist agent or the logical agent.
+
+    Args:
+        state (State):
+            The current state of the conversation,
+            containing messages and message type.
+
+    Returns:
+        dict:
+            A dictionary indicating the next node to invoke based on the
+            message type. If the message type is 'emotional', it routes to
+            the therapist agent. If the message type is 'logical', it routes
+            to the logical agent.
+    """
+
     message_type = state.get("message_type", "logical")
     if message_type == "emotional":
         return {"next": "therapist"}
@@ -56,7 +108,22 @@ def router(state: State):
     return {"next": "logical"}
 
 
-def therapist_agent(state: State):
+def therapist_agent(state: State) -> dict:
+    """Therapist agent that provides emotional support.
+
+    This function uses a language model to respond to the user's last message
+    with empathy and emotional understanding.
+
+    Args:
+        state (State):
+            The current state of the conversation, containing messages.
+
+    Returns:
+        dict:
+            A dictionary containing the assistant's response to the user's last
+            message, focusing on emotional support and empathy.
+    """
+
     last_message = state["messages"][-1]
 
     messages = [
@@ -78,7 +145,21 @@ def therapist_agent(state: State):
     return {"messages": [{"role": "assistant", "content": reply.content}]}
 
 
-def logical_agent(state: State):
+def logical_agent(state: State) -> dict:
+    """Logical agent that provides factual information.
+
+    This function uses a language model to respond to the user's last message
+    with clear, concise, and factual information.
+
+    Args:
+        state (State):
+            The current state of the conversation, containing messages.
+
+    Returns:
+        dict:
+            A dictionary containing the assistant's response to the user's last
+            message, focusing on logical analysis and factual information.
+    """
     last_message = state["messages"][-1]
 
     messages = [
@@ -98,8 +179,13 @@ def logical_agent(state: State):
     return {"messages": [{"role": "assistant", "content": reply.content}]}
 
 
+# This graph will manage the state of the conversation
+# and the flow of messages.
+# It starts with the initial state and ends with the final state.
+# The graph will be built using the StateGraph class.
 graph_builder = StateGraph(State)
 
+# Define the nodes and edges of the graph
 graph_builder.add_node("classifier", classify_message)
 graph_builder.add_node("router", router)
 graph_builder.add_node("therapist", therapist_agent)
@@ -121,7 +207,14 @@ graph_builder.add_edge("logical", END)
 graph = graph_builder.compile()
 
 
-def run_chatbot():
+def run_chatbot() -> None:
+    """Run the chatbot interaction loop.
+
+    This function continuously prompts the user for input,
+    invokes the graph with the user's message, and prints the response.
+    It maintains the state of the conversation and handles user input until
+    the user decides to exit.
+    """
     state = {"messages": [], "message_type": None}
 
     while True:
