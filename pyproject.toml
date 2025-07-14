@@ -12,3 +12,22 @@ dependencies = [
     "langgraph>=0.5.1",
     "python-dotenv>=1.1.1",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.13",
+]
+
+
+[tool.ruff]
+line-length = 79
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = []
+fixable = ["I001"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"

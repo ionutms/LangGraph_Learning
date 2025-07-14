@@ -1,13 +1,14 @@
-from dotenv import load_dotenv
-from typing import Dict, Any, List, Annotated
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langchain.chat_models import init_chat_model
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
-from typing_extensions import TypedDict
-import re
 import os
+import re
+from typing import Annotated, Any, Dict, List
+
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from typing_extensions import TypedDict
 
 load_dotenv()
 
@@ -211,7 +212,8 @@ class SystemVerilogCodeGenerator:
           output_dir: Directory for saving files (default: 'output').
 
         Returns:
-          Dict: Contains success, design_code, testbench_code, error, messages.
+          Dict:
+            Contains success, design_code, testbench_code, error, messages.
         """
         initial_state = {
             "user_request": user_request,

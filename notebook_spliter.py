@@ -1,9 +1,10 @@
 import json
 import os
-from typing import Dict, List, Any, TypedDict
-from pathlib import Path
 import re
-from langgraph.graph import StateGraph, END
+from pathlib import Path
+from typing import Any, Dict, List, TypedDict
+
+from langgraph.graph import END, StateGraph
 
 
 class NotebookSplitterState(TypedDict):
@@ -481,7 +482,7 @@ def explain_split_levels():
 
 if __name__ == "__main__":
     """Interactive usage of the notebook splitter.
-    
+
     Main entry point that provides a command-line interface for splitting
     Jupyter notebooks with interactive selection and configuration options.
     """
