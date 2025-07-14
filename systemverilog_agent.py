@@ -115,7 +115,6 @@ class SystemVerilogCodeGenerator:
             ]
             response = self.llm.invoke(messages)
             content = response.content
-            print(f"Raw LLM response:\n{content}\n")  # Debug output
 
             # Extract code blocks
             design_code = ""
@@ -141,8 +140,8 @@ class SystemVerilogCodeGenerator:
                     f"for: {state['user_request']}"
                 )
             )
-        except Exception as e:
-            state["error"] = f"Code generation error: {str(e)}"
+        except Exception as error:
+            state["error"] = f"Code generation error: {str(error)}"
         return state
 
     def _save_code(
@@ -177,8 +176,8 @@ class SystemVerilogCodeGenerator:
             # Save design code
             design_filename = f"{module_name}.sv"
             design_filepath = os.path.join(module_dir, design_filename)
-            with open(design_filepath, "w") as f:
-                f.write(design_code)
+            with open(design_filepath, "w") as design_file:
+                design_file.write(design_code)
             messages.append(f"Design saved to {design_filepath}")
 
             # Save testbench code if available
@@ -187,15 +186,15 @@ class SystemVerilogCodeGenerator:
                 testbench_filepath = os.path.join(
                     module_dir, testbench_filename
                 )
-                with open(testbench_filepath, "w") as f:
-                    f.write(testbench_code)
+                with open(testbench_filepath, "w") as testbench_file:
+                    testbench_file.write(testbench_code)
                 messages.append(f"Testbench saved to {testbench_filepath}")
             else:
                 messages.append("No testbench code to save")
 
             return messages
-        except Exception as e:
-            return [f"Error saving code: {str(e)}"]
+        except Exception as error:
+            return [f"Error saving code: {str(error)}"]
 
     def generate(
         self,
@@ -229,8 +228,8 @@ class SystemVerilogCodeGenerator:
             save_messages = self._save_code(
                 result["generated_code"], result["testbench_code"], output_dir
             )
-            for msg in save_messages:
-                result["messages"].append(AIMessage(content=msg))
+            for message in save_messages:
+                result["messages"].append(AIMessage(content=message))
 
         return {
             "success": not bool(result["error"]),
@@ -264,22 +263,16 @@ if __name__ == "__main__":
         )
 
         if result["success"]:
-            print("Generated SystemVerilog Design:")
-            print("-" * 40)
-            print(result["design_code"])
-            print("-" * 40)
-            print("Generated SystemVerilog Testbench:")
-            print("-" * 40)
-            print(result["testbench_code"] or "No testbench generated")
-            print("-" * 40)
             print("✓ Design and testbench generation successful")
         else:
             print(f"❌ Error: {result['error']}")
 
         # Show agent messages
         print("\nAgent Messages:")
-        for msg in result["messages"]:
-            role = "user" if isinstance(msg, HumanMessage) else "assistant"
-            print(f"[{role}]: {msg.content}")
+        for message in result["messages"]:
+            role = (
+                "user" if isinstance(message, HumanMessage) else "assistant"
+            )
+            print(f"[{role}]: {message.content}")
 
         print("\n" + "=" * 60)
