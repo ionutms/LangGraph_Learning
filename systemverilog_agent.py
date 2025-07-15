@@ -802,19 +802,6 @@ if __name__ == "__main__":
                 print("✅ Successfully loaded saved code")
                 print(f"📦 Module name: {loaded_result['module_name']}")
 
-            # Run simulation on existing code
-            print("\n🔄 Running simulation on saved code...")
-            sim_result = generator.run_simulation_on_existing(
-                result["module_dir"]
-            )
-            if sim_result.get("success", False):
-                print("✅ Simulation completed successfully")
-            else:
-                print(
-                    f"❌ Simulation failed: {
-                        sim_result.get('message', 'Unknown error')
-                    }"
-                )
         else:
             print(f"❌ Error: {result['error']}")
 
