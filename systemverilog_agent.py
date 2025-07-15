@@ -19,12 +19,16 @@ from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-from verilator_runner import run_docker_compose
+from systemverilog_agent_tools import (
+    generate_env_file_tool,
+    load_saved_code_tool,
+    run_simulation_tool,
+    save_code_tool,
+)
 
 load_dotenv()
 
@@ -99,8 +103,6 @@ class AgentState(TypedDict):
         output_dir: Directory for saving files.
         module_dir: Full path to the module-specific directory.
         saved_files: Dictionary tracking saved file paths.
-        retry_on_failure: Whether to allow retries on simulation failure.
-        retry_count: Number of retry attempts made.
         user_retry_confirmed: Whether user confirmed retry via prompt.
     """
 
@@ -113,298 +115,7 @@ class AgentState(TypedDict):
     output_dir: str
     module_dir: str
     saved_files: Dict[str, str]
-    retry_on_failure: bool
-    retry_count: int
     user_retry_confirmed: bool
-
-
-@tool
-def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
-    """Loads saved SystemVerilog code and .env file from a directory.
-
-    Args:
-        module_dir: Path to directory with SystemVerilog files and .env.
-
-    Returns:
-        Dict: Contains design_code, testbench_code, env_content, module_name,
-            user_request, and error message.
-
-    Raises:
-        FileNotFoundError: If directory or required files are missing.
-        Exception: For unexpected errors during file reading.
-    """
-    try:
-        result = {
-            "design_code": "",
-            "testbench_code": "",
-            "env_content": "",
-            "module_name": "",
-            "user_request": "",
-            "error": "",
-        }
-
-        if not os.path.exists(module_dir):
-            return {
-                **result,
-                "error": f"Module directory does not exist: {module_dir}. "
-                "It may have been removed during simulation cleanup.",
-            }
-
-        # Find .env file to get module information
-        env_path = os.path.join(module_dir, ".env")
-        if os.path.exists(env_path):
-            with open(env_path, "r") as f:
-                env_content = f.read().strip()
-                result["env_content"] = env_content
-
-                # Extract module name and user request from env content
-                for line in env_content.split("\n"):
-                    if line.startswith("DESIGN_FILE="):
-                        design_filename = line.split("=")[1]
-                        result["module_name"] = design_filename.replace(
-                            ".sv", ""
-                        )
-                    elif line.startswith("USER_REQUEST="):
-                        result["user_request"] = "=".join(
-                            line.split("=")[1:]
-                        ).strip()
-
-        # If no module name found from .env, try to find .sv files
-        if not result["module_name"]:
-            sv_files = [
-                f
-                for f in os.listdir(module_dir)
-                if f.endswith(".sv") and not f.endswith("_tb.sv")
-            ]
-            if sv_files:
-                result["module_name"] = sv_files[0].replace(".sv", "")
-
-        if not result["module_name"]:
-            return {
-                **result,
-                "error": "Could not determine module name from saved files",
-            }
-
-        # Load design code
-        design_path = os.path.join(module_dir, f"{result['module_name']}.sv")
-        if os.path.exists(design_path):
-            with open(design_path, "r") as f:
-                result["design_code"] = f.read().strip()
-        else:
-            return {
-                **result,
-                "error": f"Design file not found: {design_path}",
-            }
-
-        # Load testbench code
-        testbench_path = os.path.join(
-            module_dir, f"{result['module_name']}_tb.sv"
-        )
-        if os.path.exists(testbench_path):
-            with open(testbench_path, "r") as f:
-                result["testbench_code"] = f.read().strip()
-        else:
-            result["error"] = f"Testbench file not found: {testbench_path}"
-
-        return result
-
-    except Exception as error:
-        return {
-            "design_code": "",
-            "testbench_code": "",
-            "env_content": "",
-            "module_name": "",
-            "user_request": "",
-            "error": f"Error loading saved code: {str(error)}",
-        }
-
-
-@tool
-def generate_env_file_tool(
-    generated_code: str, output_dir: str = "output", user_request: str = ""
-) -> Dict[str, Any]:
-    """Generates .env file content for a SystemVerilog project.
-
-    Args:
-        generated_code: Design code to extract module name from.
-        output_dir: Base directory for saving files (default: 'output').
-        user_request: Original user request to store in .env.
-
-    Returns:
-        Dict: Contains env_content and any error message.
-
-    Raises:
-        Exception: If module name extraction or .env generation fails.
-    """
-    try:
-        # Extract module name from design code
-        module_match = re.search(r"module\s+(\w+)", generated_code)
-        module_name = (
-            module_match.group(1) if module_match else "generated_module"
-        )
-
-        # Create relative path to the module directory
-        module_relative_path = f"./{output_dir}/{module_name}"
-
-        design_filename = f"{module_name}.sv"
-        testbench_filename = f"{module_name}_tb.sv"
-
-        # Define .env key-value pairs with relative paths
-        env_lines = [
-            f"PROJECT_DIR={module_relative_path}",
-            f"DESIGN_FILE={design_filename}",
-            f"TESTBENCH_FILE={testbench_filename}",
-            f"TOP_MODULE={module_name}_tb",
-            f"VCD_FILE={module_name}_tb.vcd",
-            f"USER_REQUEST={user_request}",
-        ]
-
-        # Join lines with newlines for .env content
-        env_content = "\n".join(env_lines)
-
-        return {"env_content": env_content, "error": ""}
-    except Exception as error:
-        return {
-            "env_content": "",
-            "error": f"Environment file generation error: {str(error)}",
-        }
-
-
-@tool
-def save_code_tool(
-    design_code: str,
-    testbench_code: str,
-    env_content: str,
-    output_dir: str = "output",
-) -> Dict[str, Any]:
-    """Saves SystemVerilog code and .env to a module-specific directory.
-
-    Args:
-        design_code: Generated SystemVerilog design code.
-        testbench_code: Generated testbench code.
-        env_content: Generated .env file content.
-        output_dir: Base directory for saving files (default: 'output').
-
-    Returns:
-        Dict: Contains status messages, saved file paths, module_dir,
-            module_name, and error message.
-
-    Raises:
-        OSError: If directory creation or file writing fails.
-        Exception: For unexpected errors during file saving.
-    """
-    try:
-        messages = []
-        saved_files = {}
-
-        module_match = re.search(r"module\s+(\w+)", design_code)
-        module_name = (
-            module_match.group(1) if module_match else "generated_module"
-        )
-
-        # Create module-specific directory
-        module_dir = os.path.join(output_dir, module_name)
-        os.makedirs(module_dir, exist_ok=True)
-
-        # Save design code
-        design_filename = f"{module_name}.sv"
-        design_filepath = os.path.join(module_dir, design_filename)
-        with open(design_filepath, "w") as design_file:
-            design_file.write(design_code)
-        messages.append(f"Design saved to {design_filepath}")
-        saved_files["design_file"] = design_filepath
-
-        # Save testbench code if available
-        testbench_filename = f"{module_name}_tb.sv"
-        testbench_filepath = os.path.join(module_dir, testbench_filename)
-        if testbench_code:
-            with open(testbench_filepath, "w") as testbench_file:
-                testbench_file.write(testbench_code)
-            messages.append(f"Testbench saved to {testbench_filepath}")
-            saved_files["testbench_file"] = testbench_filepath
-        else:
-            messages.append("No testbench code to save")
-
-        # Save .env file
-        env_filepath = os.path.join(module_dir, ".env")
-        if env_content:
-            with open(env_filepath, "w") as env_file:
-                env_file.write(env_content)
-            messages.append(f"Environment file saved to {env_filepath}")
-            saved_files["env_file"] = env_filepath
-        else:
-            messages.append("No .env file content to save")
-
-        return {
-            "messages": messages,
-            "error": "",
-            "module_dir": module_dir,
-            "saved_files": saved_files,
-            "module_name": module_name,
-        }
-    except Exception as error:
-        return {
-            "messages": [],
-            "error": f"Error saving code: {str(error)}",
-            "module_dir": "",
-            "saved_files": {},
-            "module_name": "",
-        }
-
-
-@tool
-def run_simulation_tool(
-    target_dir: str, strip_lines: bool = True
-) -> Dict[str, Any]:
-    """Runs Verilator simulation using Docker Compose.
-
-    Args:
-        target_dir: Directory with .env and SystemVerilog files.
-        strip_lines: Strips first/last lines from output (default: True).
-
-    Returns:
-        Dict: Contains success status, return code, message, and error.
-
-    Raises:
-        Exception: If simulation execution fails.
-    """
-    try:
-        # Ensure target directory ends with separator for run_docker_compose
-        if not target_dir.endswith(os.sep):
-            target_dir += os.sep
-
-        print(f"Starting Verilator simulation in: {target_dir}")
-
-        # Run the simulation
-        return_code = run_docker_compose(
-            target_dir=target_dir, strip_lines=strip_lines
-        )
-
-        success = return_code == 0
-
-        if success:
-            message = "Verilator simulation completed successfully"
-        else:
-            message = (
-                f"Verilator simulation failed with return code: {return_code}"
-            )
-
-        return {
-            "success": success,
-            "return_code": return_code,
-            "message": message,
-            "error": ""
-            if success
-            else f"Simulation failed (exit code: {return_code})",
-        }
-
-    except Exception as error:
-        return {
-            "success": False,
-            "return_code": -1,
-            "message": f"Error running simulation: {str(error)}",
-            "error": f"Simulation tool error: {str(error)}",
-        }
 
 
 class SystemVerilogCodeGenerator:
@@ -428,63 +139,59 @@ class SystemVerilogCodeGenerator:
         self.graph = self.create_workflow()
 
     def create_workflow(self) -> StateGraph:
-        """Creates a LangGraph workflow for SystemVerilog code generation.
-
-        Builds a workflow with nodes for code generation, .env creation,
-        file saving, simulation, and interactive retry on simulation failure.
-
-        Returns:
-            StateGraph: Compiled workflow with defined nodes and edges.
-        """
+        """Creates a LangGraph workflow for SystemVerilog code generation."""
         workflow = StateGraph(AgentState)
+
+        # Add nodes
         workflow.add_node("generate_code", self.generate_systemverilog)
         workflow.add_node("generate_env", self.create_env_file)
         workflow.add_node("save_code", self.save_generated_files)
         workflow.add_node("run_simulation", self.execute_simulation)
         workflow.add_node("retry_on_failure", self.retry_on_failure)
 
+        # Linear workflow edges
         workflow.add_edge(START, "generate_code")
         workflow.add_edge("generate_code", "generate_env")
         workflow.add_edge("generate_env", "save_code")
         workflow.add_edge("save_code", "run_simulation")
 
-        # Conditional edge from run_simulation to retry_on_failure or END
-        def route_after_simulation(state: AgentState) -> str:
+        # Conditional routing after simulation
+        def route_simulation_result(state: AgentState) -> str:
+            """Routes based on simulation success/failure."""
             simulation_failed = (
                 bool(state["error"])
                 and "simulation" in state["error"].lower()
             )
-            max_retries = 3
-            if (
-                simulation_failed
-                and state.get("retry_on_failure", False)
-                and state.get("retry_count", 0) < max_retries
-            ):
-                return "retry_on_failure"
-            return END
+            return (
+                "simulation_failed"
+                if simulation_failed
+                else "simulation_success"
+            )
 
         workflow.add_conditional_edges(
             "run_simulation",
-            route_after_simulation,
+            route_simulation_result,
             {
-                "retry_on_failure": "retry_on_failure",
-                END: END,
+                "simulation_failed": "retry_on_failure",
+                "simulation_success": END,
             },
         )
 
-        # Conditional edge from retry_on_failure back to generate_code or END
-        def route_after_retry(state: AgentState) -> str:
-            # Check if user confirmed retry
-            if state.get("user_retry_confirmed", False):
-                return "generate_code"
-            return END
+        # Conditional routing after retry decision
+        def route_retry_decision(state: AgentState) -> str:
+            """Routes based on user retry confirmation."""
+            return (
+                "user_retry_confirmed"
+                if state.get("user_retry_confirmed", False)
+                else "user_exit"
+            )
 
         workflow.add_conditional_edges(
             "retry_on_failure",
-            route_after_retry,
+            route_retry_decision,
             {
-                "generate_code": "generate_code",
-                END: END,
+                "user_retry_confirmed": "generate_code",
+                "user_exit": END,
             },
         )
 
@@ -674,12 +381,11 @@ class SystemVerilogCodeGenerator:
     def retry_on_failure(self, state: AgentState) -> AgentState:
         """Prompts user to retry the workflow if simulation fails.
 
-        Asks for user input (Enter to retry, 'exit' to stop) if retry is
-        allowed and the retry limit is not reached.
-        Resets state fields for retry if confirmed.
+        Asks for user input (Enter to retry, 'exit' to stop) and resets
+        state fields for retry if confirmed.
 
         Args:
-            state: Agent state with simulation results and retry preferences.
+            state: Agent state with simulation results.
 
         Returns:
             AgentState:
@@ -693,13 +399,7 @@ class SystemVerilogCodeGenerator:
                 and "simulation" in state["error"].lower()
             )
 
-            # Initialize retry_count if not set
-            if "retry_count" not in state:
-                state["retry_count"] = 0
-
-            # Check retry conditions: user allows retry, simulation failed,
-            # and retry limit not reached
-            if state.get("retry_on_failure", False) and simulation_failed:
+            if simulation_failed:
                 # Prompt user for input
                 print(f"Simulation failed: {state['error']}")
                 user_input = (
@@ -709,7 +409,6 @@ class SystemVerilogCodeGenerator:
                 )
 
                 if user_input == "" or user_input == "enter":
-                    state["retry_count"] += 1
                     state["messages"].append(
                         AIMessage(content="User confirmed retry.")
                     )
@@ -819,27 +518,20 @@ class SystemVerilogCodeGenerator:
     def generate(
         self,
         user_request: str,
-        save_file: bool = False,
         output_dir: str = "output",
-        retry_on_failure: bool = False,
     ) -> Dict[str, Any]:
         """Generates SystemVerilog design, testbench, and .env file.
 
-        Optionally saves files and runs simulation if save_file is True.
-        Supports interactive retry on simulation failure if retry_on_failure
-        is enabled.
+        Always saves files and runs simulation with interactive retry
+        on simulation failure.
 
         Args:
             user_request: Description of the desired SystemVerilog module.
-            save_file: Whether to save generated files (default: False).
             output_dir: Directory for saving files (default: 'output').
-            retry_on_failure:
-                Whether to allow interactive retries on simulation failure
-                (default: False).
 
         Returns:
             Dict: Contains success, design_code, testbench_code, env_content,
-                error, messages, saved_files, module_dir, and retry_count.
+                error, messages, saved_files, and module_dir.
 
         Raises:
             OSError: If output directory creation fails.
@@ -855,39 +547,29 @@ class SystemVerilogCodeGenerator:
             "output_dir": output_dir,
             "module_dir": "",
             "saved_files": {},
-            "retry_on_failure": retry_on_failure,
-            "retry_count": 0,
             "user_retry_confirmed": False,
         }
 
-        if save_file:
-            # Ensure output directory exists
-            try:
-                os.makedirs(output_dir, exist_ok=True)
-            except Exception as error:
-                initial_state["error"] = (
-                    f"Failed to create output directory: {str(error)}"
-                )
-                return {
-                    "success": False,
-                    "design_code": "",
-                    "testbench_code": "",
-                    "env_content": "",
-                    "error": initial_state["error"],
-                    "messages": initial_state["messages"],
-                    "saved_files": {},
-                    "module_dir": "",
-                    "retry_count": 0,
-                }
-            result = self.graph.invoke(initial_state)
-        else:
-            workflow = StateGraph(AgentState)
-            workflow.add_node("generate_code", self.generate_systemverilog)
-            workflow.add_node("generate_env", self.create_env_file)
-            workflow.add_edge(START, "generate_code")
-            workflow.add_edge("generate_code", "generate_env")
-            workflow.add_edge("generate_env", END)
-            result = workflow.compile().invoke(initial_state)
+        # Ensure output directory exists
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except Exception as error:
+            initial_state["error"] = (
+                f"Failed to create output directory: {str(error)}"
+            )
+            return {
+                "success": False,
+                "design_code": "",
+                "testbench_code": "",
+                "env_content": "",
+                "error": initial_state["error"],
+                "messages": initial_state["messages"],
+                "saved_files": {},
+                "module_dir": "",
+            }
+
+        # Always use the full workflow (save files and run simulation)
+        result = self.graph.invoke(initial_state)
 
         return {
             "success": not bool(result["error"]),
@@ -898,14 +580,9 @@ class SystemVerilogCodeGenerator:
             "messages": result["messages"],
             "saved_files": result.get("saved_files", {}),
             "module_dir": result.get("module_dir", ""),
-            "retry_count": result.get("retry_count", 0),
         }
 
-    def retry_workflow(
-        self,
-        module_dir: str,
-        retry_on_failure: bool = False,
-    ) -> Dict[str, Any]:
+    def retry_workflow(self, module_dir: str) -> Dict[str, Any]:
         """Retries the workflow for a previously generated module.
 
         Loads the user request from the previous run and restarts the workflow
@@ -914,13 +591,10 @@ class SystemVerilogCodeGenerator:
 
         Args:
             module_dir: Directory of the previous run containing saved files.
-            retry_on_failure:
-                Whether to allow interactive retries on simulation failure
-                (default: False).
 
         Returns:
             Dict: Contains success, design_code, testbench_code, env_content,
-                error, messages, saved_files, module_dir, and retry_count.
+                error, messages, saved_files, and module_dir.
 
         Raises:
             FileNotFoundError: If module_dir or required files are missing.
@@ -939,7 +613,6 @@ class SystemVerilogCodeGenerator:
                     "messages": [AIMessage(content=load_result["error"])],
                     "saved_files": {},
                     "module_dir": module_dir,
-                    "retry_count": 0,
                 }
 
             # Use user_request from .env or infer from module name
@@ -969,8 +642,6 @@ class SystemVerilogCodeGenerator:
                 "output_dir": os.path.dirname(module_dir) or "output",
                 "module_dir": "",
                 "saved_files": {},
-                "retry_on_failure": retry_on_failure,
-                "retry_count": 0,
                 "user_retry_confirmed": False,
             }
 
@@ -990,7 +661,6 @@ class SystemVerilogCodeGenerator:
                     "messages": initial_state["messages"],
                     "saved_files": {},
                     "module_dir": module_dir,
-                    "retry_count": 0,
                 }
 
             # Run the workflow
@@ -1005,7 +675,6 @@ class SystemVerilogCodeGenerator:
                 "messages": result["messages"],
                 "saved_files": result.get("saved_files", {}),
                 "module_dir": result.get("module_dir", ""),
-                "retry_count": result.get("retry_count", 0),
             }
 
         except Exception as error:
@@ -1022,7 +691,6 @@ class SystemVerilogCodeGenerator:
                 ],
                 "saved_files": {},
                 "module_dir": module_dir,
-                "retry_count": 0,
             }
 
 
@@ -1036,7 +704,7 @@ if __name__ == "__main__":
     # Example requests
     test_requests = [
         "Create a simple 4-bit counter module",
-        "Generate a 2-to-1 multiplexer with enable signal",
+        # "Generate a 2-to-1 multiplexer with enable signal",
         # "Create a D flip-flop with asynchronous reset",
     ]
 
@@ -1046,14 +714,11 @@ if __name__ == "__main__":
 
         result = generator.generate(
             request,
-            save_file=True,
             output_dir="sv_output",
-            retry_on_failure=True,
         )
 
         print(f"Success: {result['success']}")
         print(f"Module directory: {result['module_dir'] or 'Not set'}")
-        print(f"Retry attempts: {result['retry_count']}")
         if result["error"]:
             print(f"Error: {result['error']}")
 
@@ -1084,15 +749,13 @@ if __name__ == "__main__":
             ):
                 print("\n🔄 Attempting manual retry of workflow...")
                 retry_result = generator.retry_workflow(
-                    module_dir=result["module_dir"],
-                    retry_on_failure=True,
+                    module_dir=result["module_dir"]
                 )
                 print(f"Retry Success: {retry_result['success']}")
                 print(
                     f"Retry Module directory: "
                     f"{retry_result['module_dir'] or 'Not set'}"
                 )
-                print(f"Retry attempts: {retry_result['retry_count']}")
                 if retry_result["success"]:
                     print("✅ Retry successful")
                     if retry_result["saved_files"]:
