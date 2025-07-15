@@ -1,3 +1,15 @@
+"""SystemVerilog code generator for creating and testing designs.
+
+This module provides a SystemVerilogCodeGenerator class to generate
+SystemVerilog design and testbench code, create .env files, save
+generated files, and run Verilator simulations using a LangGraph
+workflow. It includes tools for loading and simulating existing code.
+
+Attributes:
+    LLM_MODEL: Model identifier for the language model.
+    LLM_INSTRUCTIONS: Instructions for SystemVerilog code generation.
+"""
+
 import os
 import re
 from typing import Annotated, Any, Dict
@@ -74,8 +86,7 @@ Generate clean, well-structured SystemVerilog code based on user requirements.
 
 
 class AgentState(TypedDict):
-    """
-    State for SystemVerilog code generation agent.
+    """State for SystemVerilog code generation agent.
 
     Attributes:
         user_request: User request for SystemVerilog code.
@@ -102,16 +113,18 @@ class AgentState(TypedDict):
 
 @tool
 def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
-    """
-    Load previously saved SystemVerilog code from files.
+    """Loads saved SystemVerilog code and .env file from a directory.
 
     Args:
-        module_dir: Directory containing the saved SystemVerilog files.
+        module_dir: Path to directory with SystemVerilog files and .env.
 
     Returns:
-        Dict:
-            Contains loaded design_code, testbench_code, env_content,
-            and any error.
+        Dict: Contains design_code, testbench_code, env_content, module_name,
+            and error message.
+
+    Raises:
+        FileNotFoundError: If directory or required files are missing.
+        Exception: For unexpected errors during file reading.
     """
     try:
         result = {
@@ -197,16 +210,17 @@ def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
 def generate_env_file_tool(
     generated_code: str, output_dir: str = "output"
 ) -> Dict[str, Any]:
-    """
-    Generate .env file content for the SystemVerilog project.
+    """Generates .env file content for a SystemVerilog project.
 
     Args:
-        generated_code:
-            Generated design code from which to extract module name.
-        output_dir: Base output directory where files are saved.
+        generated_code: Design code to extract module name from.
+        output_dir: Base directory for saving files (default: 'output').
 
     Returns:
         Dict: Contains env_content and any error message.
+
+    Raises:
+        Exception: If module name extraction or .env generation fails.
     """
     try:
         # Extract module name from design code
@@ -248,19 +262,21 @@ def save_code_tool(
     env_content: str,
     output_dir: str = "output",
 ) -> Dict[str, Any]:
-    """
-    Save SystemVerilog code and .env file to a module-specific folder.
+    """Saves SystemVerilog code and .env to a module-specific directory.
 
     Args:
-        design_code: Generated design code.
+        design_code: Generated SystemVerilog design code.
         testbench_code: Generated testbench code.
         env_content: Generated .env file content.
         output_dir: Base directory for saving files (default: 'output').
 
     Returns:
-        Dict:
-            Contains list of status messages, saved file paths,
-            and any error message.
+        Dict: Contains status messages, saved file paths, module_dir,
+            module_name, and error message.
+
+    Raises:
+        OSError: If directory creation or file writing fails.
+        Exception: For unexpected errors during file saving.
     """
     try:
         messages = []
@@ -325,16 +341,17 @@ def save_code_tool(
 def run_simulation_tool(
     target_dir: str, strip_lines: bool = True
 ) -> Dict[str, Any]:
-    """
-    Run Verilator simulation using Docker Compose.
+    """Runs Verilator simulation using Docker Compose.
 
     Args:
-        target_dir:
-            Directory containing the .env file and SystemVerilog files.
-        strip_lines: Whether to strip first and last lines from output.
+        target_dir: Directory with .env and SystemVerilog files.
+        strip_lines: Strips first/last lines from output (default: True).
 
     Returns:
-        Dict: Contains success status, return code, and any error message.
+        Dict: Contains success status, return code, message, and error.
+
+    Raises:
+        Exception: If simulation execution fails.
     """
     try:
         # Ensure target directory ends with separator for run_docker_compose
@@ -377,10 +394,10 @@ def run_simulation_tool(
 
 class SystemVerilogCodeGenerator:
     def __init__(self):
-        """
-        Initialize SystemVerilog code generator with LLM.
+        """Initializes the SystemVerilog code generator with LLM and tools.
 
-        Generates SystemVerilog code and testbench per standards.
+        Sets up the language model, prompt, and workflow for generating
+        SystemVerilog code and testbenches per standards.
         """
         self.tools = [
             load_saved_code_tool,
@@ -393,20 +410,22 @@ class SystemVerilogCodeGenerator:
             ("system", LLM_INSTRUCTIONS),
             ("human", "{user_request}"),
         ])
-        self.graph = self._create_graph()
+        self.graph = self.create_workflow()
 
-    def _create_graph(self):
-        """
-        Create LangGraph workflow for code generation and simulation.
+    def create_workflow(self) -> StateGraph:
+        """Creates a LangGraph workflow for SystemVerilog code generation.
+
+        Builds a workflow with nodes for code generation, .env creation,
+        file saving, and simulation.
 
         Returns:
-            StateGraph: Compiled workflow with nodes and edges.
+            StateGraph: Compiled workflow with defined nodes and edges.
         """
         workflow = StateGraph(AgentState)
-        workflow.add_node("generate_code", self._generate_code)
-        workflow.add_node("generate_env", self._call_generate_env_tool)
-        workflow.add_node("save_code", self._call_save_code_tool)
-        workflow.add_node("run_simulation", self._call_run_simulation_tool)
+        workflow.add_node("generate_code", self.generate_systemverilog)
+        workflow.add_node("generate_env", self.create_env_file)
+        workflow.add_node("save_code", self.save_generated_files)
+        workflow.add_node("run_simulation", self.execute_simulation)
 
         workflow.add_edge(START, "generate_code")
         workflow.add_edge("generate_code", "generate_env")
@@ -416,15 +435,20 @@ class SystemVerilogCodeGenerator:
 
         return workflow.compile()
 
-    def _generate_code(self, state: AgentState) -> AgentState:
-        """
-        Generate SystemVerilog code and testbench from user request.
+    def generate_systemverilog(self, state: AgentState) -> AgentState:
+        """Generates SystemVerilog design and testbench code.
+
+        Uses LLM to generate code per standards, extracting design and
+        testbench code blocks.
 
         Args:
-            state: Current state with user request and data.
+            state: Agent state with user request and other data.
 
         Returns:
             AgentState: Updated with generated code, testbench, messages.
+
+        Raises:
+            Exception: If code generation or extraction fails.
         """
         try:
             messages = [
@@ -487,15 +511,19 @@ class SystemVerilogCodeGenerator:
             state["error"] = f"Code generation error: {str(error)}"
         return state
 
-    def _call_generate_env_tool(self, state: AgentState) -> AgentState:
-        """
-        Call the generate_env_file_tool with the generated code.
+    def create_env_file(self, state: AgentState) -> AgentState:
+        """Generates .env file content using generate_env_file_tool.
+
+        Extracts module name from code and creates .env with project config.
 
         Args:
-            state: Current state with generated code and data.
+            state: Agent state with generated code and output directory.
 
         Returns:
-            AgentState: Updated with .env file content from tool.
+            AgentState: Updated with .env content and status messages.
+
+        Raises:
+            Exception: If .env file generation fails.
         """
         try:
             result = generate_env_file_tool.invoke({
@@ -519,19 +547,22 @@ class SystemVerilogCodeGenerator:
                     )
                 )
         except Exception as error:
-            state["error"] = f"Error calling env tool: {str(error)}"
+            state["error"] = f"Error generating .env file: {str(error)}"
         return state
 
-    def _call_save_code_tool(self, state: AgentState) -> AgentState:
-        """
-        Call the save_code_tool with generated code and env content.
+    def save_generated_files(self, state: AgentState) -> AgentState:
+        """Saves generated code and .env using save_code_tool.
+
+        Stores design, testbench, and .env files in a module-specific dir.
 
         Args:
-            state:
-                Current state with generated code, testbench, and env content.
+            state: Agent state with code, testbench, and .env content.
 
         Returns:
-            AgentState: Updated with save status messages from tool.
+            AgentState: Updated with save status messages and file paths.
+
+        Raises:
+            Exception: If file saving fails due to I/O or other errors.
         """
         try:
             result = save_code_tool.invoke({
@@ -549,18 +580,22 @@ class SystemVerilogCodeGenerator:
                 state["module_dir"] = result.get("module_dir", "")
                 state["saved_files"] = result.get("saved_files", {})
         except Exception as error:
-            state["error"] = f"Error calling save code tool: {str(error)}"
+            state["error"] = f"Error saving files: {str(error)}"
         return state
 
-    def _call_run_simulation_tool(self, state: AgentState) -> AgentState:
-        """
-        Call the run_simulation_tool with the module directory.
+    def execute_simulation(self, state: AgentState) -> AgentState:
+        """Executes Verilator simulation using run_simulation_tool.
+
+        Runs simulation for saved SystemVerilog files in module directory.
 
         Args:
-            state: Current state with module directory and data.
+            state: Agent state with module directory and other data.
 
         Returns:
-            AgentState: Updated with simulation results from tool.
+            AgentState: Updated with simulation results and messages.
+
+        Raises:
+            Exception: If simulation execution fails.
         """
         try:
             result = run_simulation_tool.invoke({
@@ -571,18 +606,22 @@ class SystemVerilogCodeGenerator:
             if result["error"]:
                 state["error"] = result["error"]
         except Exception as error:
-            state["error"] = f"Error calling simulation tool: {str(error)}"
+            state["error"] = f"Error executing simulation: {str(error)}"
         return state
 
     def load_existing_code(self, module_dir: str) -> Dict[str, Any]:
-        """
-        Load existing SystemVerilog code from saved files.
+        """Loads existing SystemVerilog code and .env from a directory.
 
         Args:
-            module_dir: Directory containing the saved SystemVerilog files.
+            module_dir: Path to directory with SystemVerilog files and .env.
 
         Returns:
-            Dict: Contains loaded code and any error messages.
+            Dict: Contains design_code, testbench_code, env_content,
+                module_name, and error messages.
+
+        Raises:
+            FileNotFoundError: If directory or required files are missing.
+            Exception: For unexpected errors during file loading.
         """
         try:
             result = load_saved_code_tool.invoke({"module_dir": module_dir})
@@ -597,14 +636,19 @@ class SystemVerilogCodeGenerator:
             }
 
     def run_simulation_on_existing(self, module_dir: str) -> Dict[str, Any]:
-        """
-        Run simulation on existing saved code.
+        """Runs Verilator simulation on existing SystemVerilog code.
+
+        Verifies required files and executes simulation.
 
         Args:
-            module_dir: Directory containing the saved SystemVerilog files.
+            module_dir: Path to directory with SystemVerilog files and .env.
 
         Returns:
-            Dict: Contains simulation results and any error messages.
+            Dict: Contains success status, return code, message, and error.
+
+        Raises:
+            FileNotFoundError: If directory or .env file is missing.
+            Exception: For unexpected errors during simulation.
         """
         try:
             # First verify the files exist
@@ -644,17 +688,22 @@ class SystemVerilogCodeGenerator:
         save_file: bool = False,
         output_dir: str = "output",
     ) -> Dict[str, Any]:
-        """Generate SystemVerilog design, testbench, .env file.
+        """Generates SystemVerilog design, testbench, and .env file.
+
+        Optionally saves files and runs simulation if save_file is True.
 
         Args:
-            user_request: Desired SystemVerilog module description.
-            save_file: Save generated code to files (default: False).
+            user_request: Description of the desired SystemVerilog module.
+            save_file: Whether to save generated files (default: False).
             output_dir: Directory for saving files (default: 'output').
 
         Returns:
-            Dict:
-                Contains success, design_code, testbench_code, env_content,
-                error, messages, and saved_files.
+            Dict: Contains success, design_code, testbench_code, env_content,
+                error, messages, saved_files, and module_dir.
+
+        Raises:
+            OSError: If output directory creation fails.
+            Exception: For errors in code generation or simulation.
         """
         initial_state = {
             "user_request": user_request,
@@ -689,8 +738,8 @@ class SystemVerilogCodeGenerator:
         else:
             # Skip save_code and run_simulation nodes if not saving files
             workflow = StateGraph(AgentState)
-            workflow.add_node("generate_code", self._generate_code)
-            workflow.add_node("generate_env", self._call_generate_env_tool)
+            workflow.add_node("generate_code", self.generate_systemverilog)
+            workflow.add_node("generate_env", self.create_env_file)
             workflow.add_edge(START, "generate_code")
             workflow.add_edge("generate_code", "generate_env")
             workflow.add_edge("generate_env", END)
