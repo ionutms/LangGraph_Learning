@@ -397,7 +397,7 @@ class SystemVerilogCodeGenerator:
 
     def _create_graph(self):
         """
-        Create LangGraph workflow for code generation.
+        Create LangGraph workflow for code generation and simulation.
 
         Returns:
             StateGraph: Compiled workflow with nodes and edges.
@@ -406,11 +406,13 @@ class SystemVerilogCodeGenerator:
         workflow.add_node("generate_code", self._generate_code)
         workflow.add_node("generate_env", self._call_generate_env_tool)
         workflow.add_node("save_code", self._call_save_code_tool)
+        workflow.add_node("run_simulation", self._call_run_simulation_tool)
 
         workflow.add_edge(START, "generate_code")
         workflow.add_edge("generate_code", "generate_env")
         workflow.add_edge("generate_env", "save_code")
-        workflow.add_edge("save_code", END)
+        workflow.add_edge("save_code", "run_simulation")
+        workflow.add_edge("run_simulation", END)
 
         return workflow.compile()
 
@@ -550,6 +552,28 @@ class SystemVerilogCodeGenerator:
             state["error"] = f"Error calling save code tool: {str(error)}"
         return state
 
+    def _call_run_simulation_tool(self, state: AgentState) -> AgentState:
+        """
+        Call the run_simulation_tool with the module directory.
+
+        Args:
+            state: Current state with module directory and data.
+
+        Returns:
+            AgentState: Updated with simulation results from tool.
+        """
+        try:
+            result = run_simulation_tool.invoke({
+                "target_dir": state["module_dir"],
+                "strip_lines": True,
+            })
+            state["messages"].append(AIMessage(content=result["message"]))
+            if result["error"]:
+                state["error"] = result["error"]
+        except Exception as error:
+            state["error"] = f"Error calling simulation tool: {str(error)}"
+        return state
+
     def load_existing_code(self, module_dir: str) -> Dict[str, Any]:
         """
         Load existing SystemVerilog code from saved files.
@@ -620,8 +644,7 @@ class SystemVerilogCodeGenerator:
         save_file: bool = False,
         output_dir: str = "output",
     ) -> Dict[str, Any]:
-        """
-        Generate SystemVerilog design, testbench, and .env file.
+        """Generate SystemVerilog design, testbench, .env file.
 
         Args:
             user_request: Desired SystemVerilog module description.
@@ -664,7 +687,7 @@ class SystemVerilogCodeGenerator:
                 }
             result = self.graph.invoke(initial_state)
         else:
-            # Skip save_code node if not saving files
+            # Skip save_code and run_simulation nodes if not saving files
             workflow = StateGraph(AgentState)
             workflow.add_node("generate_code", self._generate_code)
             workflow.add_node("generate_env", self._call_generate_env_tool)
