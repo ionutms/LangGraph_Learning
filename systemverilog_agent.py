@@ -11,6 +11,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
+from verilator_runner import run_docker_compose
+
 load_dotenv()
 
 LLM_MODEL = "groq:llama3-70b-8192"
@@ -40,6 +42,24 @@ Generate clean, well-structured SystemVerilog code based on user requirements.
     - Use a meaningful instance name for all instances.
     - Include a $finish statement to properly end the simulation.
 
+**Testbench Message Requirements**:
+  - Include informative $display statements throughout the testbench:
+    - Print a header message at the start:
+    `$display("=== <Module Name> Testbench Started ===");`
+    - Print test phase messages:
+    `$display("Testing <specific_functionality>...");`
+    - Print input values being applied:
+    `$display("Applying inputs: <input_description>");`
+    - Print expected vs actual results:
+    `$display("Expected: %d, Got: %d", expected, actual);`
+    - Print pass/fail status for each test:
+    `$display("Test <test_name>: %s", pass ? "PASSED" : "FAILED");`
+    - Print a summary at the end: `$display("=== Testbench Completed ===");`
+  - Use $time in messages where relevant:
+  `$display("Time %0t: <message>", $time);`
+  - Include error messages for failed assertions or unexpected behavior
+  - Make messages clear and descriptive to help with debugging
+
 **Output Format**:
   - Provide exactly two code blocks in order:
     - ```systemverilog design
@@ -65,6 +85,8 @@ class AgentState(TypedDict):
         messages: List of conversation messages.
         error: Any error messages during code generation.
         output_dir: Directory for saving files.
+        module_dir: Full path to the module-specific directory.
+        saved_files: Dictionary tracking saved file paths.
     """
 
     user_request: str
@@ -74,16 +96,114 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
     error: str
     output_dir: str
+    module_dir: str
+    saved_files: Dict[str, str]
 
 
 @tool
-def generate_env_file_tool(generated_code: str) -> Dict[str, Any]:
+def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
+    """
+    Load previously saved SystemVerilog code from files.
+
+    Args:
+        module_dir: Directory containing the saved SystemVerilog files.
+
+    Returns:
+        Dict:
+            Contains loaded design_code, testbench_code, env_content,
+            and any error.
+    """
+    try:
+        result = {
+            "design_code": "",
+            "testbench_code": "",
+            "env_content": "",
+            "module_name": "",
+            "error": "",
+        }
+
+        if not os.path.exists(module_dir):
+            return {
+                **result,
+                "error": f"Module directory does not exist: {module_dir}",
+            }
+
+        # Find .env file to get module information
+        env_path = os.path.join(module_dir, ".env")
+        if os.path.exists(env_path):
+            with open(env_path, "r") as f:
+                env_content = f.read().strip()
+                result["env_content"] = env_content
+
+                # Extract module name from env content
+                for line in env_content.split("\n"):
+                    if line.startswith("DESIGN_FILE="):
+                        design_filename = line.split("=")[1]
+                        result["module_name"] = design_filename.replace(
+                            ".sv", ""
+                        )
+                        break
+
+        # If no module name found from .env, try to find .sv files
+        if not result["module_name"]:
+            sv_files = [
+                f
+                for f in os.listdir(module_dir)
+                if f.endswith(".sv") and not f.endswith("_tb.sv")
+            ]
+            if sv_files:
+                result["module_name"] = sv_files[0].replace(".sv", "")
+
+        if not result["module_name"]:
+            return {
+                **result,
+                "error": "Could not determine module name from saved files",
+            }
+
+        # Load design code
+        design_path = os.path.join(module_dir, f"{result['module_name']}.sv")
+        if os.path.exists(design_path):
+            with open(design_path, "r") as f:
+                result["design_code"] = f.read().strip()
+        else:
+            return {
+                **result,
+                "error": f"Design file not found: {design_path}",
+            }
+
+        # Load testbench code
+        testbench_path = os.path.join(
+            module_dir, f"{result['module_name']}_tb.sv"
+        )
+        if os.path.exists(testbench_path):
+            with open(testbench_path, "r") as f:
+                result["testbench_code"] = f.read().strip()
+        else:
+            result["error"] = f"Testbench file not found: {testbench_path}"
+
+        return result
+
+    except Exception as error:
+        return {
+            "design_code": "",
+            "testbench_code": "",
+            "env_content": "",
+            "module_name": "",
+            "error": f"Error loading saved code: {str(error)}",
+        }
+
+
+@tool
+def generate_env_file_tool(
+    generated_code: str, output_dir: str = "output"
+) -> Dict[str, Any]:
     """
     Generate .env file content for the SystemVerilog project.
 
     Args:
         generated_code:
             Generated design code from which to extract module name.
+        output_dir: Base output directory where files are saved.
 
     Returns:
         Dict: Contains env_content and any error message.
@@ -94,12 +214,16 @@ def generate_env_file_tool(generated_code: str) -> Dict[str, Any]:
         module_name = (
             module_match.group(1) if module_match else "generated_module"
         )
+
+        # Create relative path to the module directory
+        module_relative_path = f"./{output_dir}/{module_name}"
+
         design_filename = f"{module_name}.sv"
         testbench_filename = f"{module_name}_tb.sv"
 
-        # Define .env key-value pairs
+        # Define .env key-value pairs with relative paths
         env_lines = [
-            f"PROJECT_DIR=./{module_name}",
+            f"PROJECT_DIR={module_relative_path}",
             f"DESIGN_FILE={design_filename}",
             f"TESTBENCH_FILE={testbench_filename}",
             f"TOP_MODULE={module_name}_tb",
@@ -134,10 +258,14 @@ def save_code_tool(
         output_dir: Base directory for saving files (default: 'output').
 
     Returns:
-        Dict: Contains list of status messages and any error message.
+        Dict:
+            Contains list of status messages, saved file paths,
+            and any error message.
     """
     try:
         messages = []
+        saved_files = {}
+
         module_match = re.search(r"module\s+(\w+)", design_code)
         module_name = (
             module_match.group(1) if module_match else "generated_module"
@@ -153,6 +281,7 @@ def save_code_tool(
         with open(design_filepath, "w") as design_file:
             design_file.write(design_code)
         messages.append(f"Design saved to {design_filepath}")
+        saved_files["design_file"] = design_filepath
 
         # Save testbench code if available
         testbench_filename = f"{module_name}_tb.sv"
@@ -161,6 +290,7 @@ def save_code_tool(
             with open(testbench_filepath, "w") as testbench_file:
                 testbench_file.write(testbench_code)
             messages.append(f"Testbench saved to {testbench_filepath}")
+            saved_files["testbench_file"] = testbench_filepath
         else:
             messages.append("No testbench code to save")
 
@@ -170,12 +300,79 @@ def save_code_tool(
             with open(env_filepath, "w") as env_file:
                 env_file.write(env_content)
             messages.append(f"Environment file saved to {env_filepath}")
+            saved_files["env_file"] = env_filepath
         else:
             messages.append("No .env file content to save")
 
-        return {"messages": messages, "error": ""}
+        return {
+            "messages": messages,
+            "error": "",
+            "module_dir": module_dir,
+            "saved_files": saved_files,
+            "module_name": module_name,
+        }
     except Exception as error:
-        return {"messages": [], "error": f"Error saving code: {str(error)}"}
+        return {
+            "messages": [],
+            "error": f"Error saving code: {str(error)}",
+            "module_dir": "",
+            "saved_files": {},
+            "module_name": "",
+        }
+
+
+@tool
+def run_simulation_tool(
+    target_dir: str, strip_lines: bool = True
+) -> Dict[str, Any]:
+    """
+    Run Verilator simulation using Docker Compose.
+
+    Args:
+        target_dir:
+            Directory containing the .env file and SystemVerilog files.
+        strip_lines: Whether to strip first and last lines from output.
+
+    Returns:
+        Dict: Contains success status, return code, and any error message.
+    """
+    try:
+        # Ensure target directory ends with separator for run_docker_compose
+        if not target_dir.endswith(os.sep):
+            target_dir += os.sep
+
+        print(f"Starting Verilator simulation in: {target_dir}")
+
+        # Run the simulation
+        return_code = run_docker_compose(
+            target_dir=target_dir, strip_lines=strip_lines
+        )
+
+        success = return_code == 0
+
+        if success:
+            message = "Verilator simulation completed successfully"
+        else:
+            message = (
+                f"Verilator simulation failed with return code: {return_code}"
+            )
+
+        return {
+            "success": success,
+            "return_code": return_code,
+            "message": message,
+            "error": ""
+            if success
+            else f"Simulation failed (exit code: {return_code})",
+        }
+
+    except Exception as error:
+        return {
+            "success": False,
+            "return_code": -1,
+            "message": f"Error running simulation: {str(error)}",
+            "error": f"Simulation tool error: {str(error)}",
+        }
 
 
 class SystemVerilogCodeGenerator:
@@ -185,7 +382,12 @@ class SystemVerilogCodeGenerator:
 
         Generates SystemVerilog code and testbench per standards.
         """
-        self.tools = [generate_env_file_tool, save_code_tool]
+        self.tools = [
+            load_saved_code_tool,
+            generate_env_file_tool,
+            save_code_tool,
+            run_simulation_tool,
+        ]
         self.llm = init_chat_model(LLM_MODEL).bind_tools(self.tools)
         self.sv_prompt = ChatPromptTemplate.from_messages([
             ("system", LLM_INSTRUCTIONS),
@@ -204,10 +406,12 @@ class SystemVerilogCodeGenerator:
         workflow.add_node("generate_code", self._generate_code)
         workflow.add_node("generate_env", self._call_generate_env_tool)
         workflow.add_node("save_code", self._call_save_code_tool)
+
         workflow.add_edge(START, "generate_code")
         workflow.add_edge("generate_code", "generate_env")
         workflow.add_edge("generate_env", "save_code")
         workflow.add_edge("save_code", END)
+
         return workflow.compile()
 
     def _generate_code(self, state: AgentState) -> AgentState:
@@ -231,17 +435,42 @@ class SystemVerilogCodeGenerator:
             # Extract code blocks
             design_code = ""
             testbench_code = ""
-            code_blocks = re.findall(
-                r"```systemverilog\s*(.*?)\s*```", content, re.DOTALL
+
+            # Look for design code block
+            design_match = re.search(
+                r"```systemverilog\s+design\s*\n(.*?)```", content, re.DOTALL
             )
-            if len(code_blocks) >= 2:
-                design_code = code_blocks[0].strip()
-                testbench_code = code_blocks[1].strip()
-            elif len(code_blocks) == 1:
-                design_code = code_blocks[0].strip()
-                state["error"] = "Testbench not provided by LLM"
-            else:
-                state["error"] = "No valid SystemVerilog code found"
+            if design_match:
+                design_code = design_match.group(1).strip()
+
+            # Look for testbench code block
+            testbench_match = re.search(
+                r"```systemverilog\s+testbench\s*\n(.*?)```",
+                content,
+                re.DOTALL,
+            )
+            if testbench_match:
+                testbench_code = testbench_match.group(1).strip()
+
+            if not design_code and not testbench_code:
+                code_blocks = re.findall(
+                    r"```systemverilog\s*\n(.*?)```", content, re.DOTALL
+                )
+                if len(code_blocks) >= 2:
+                    design_code = code_blocks[0].strip()
+                    testbench_code = code_blocks[1].strip()
+                elif len(code_blocks) == 1:
+                    design_code = code_blocks[0].strip()
+                    state["error"] = "Testbench not provided by LLM"
+                    return state
+                else:
+                    state["error"] = "No valid SystemVerilog code found"
+                    return state
+            elif not design_code:
+                state["error"] = "Design code not found"
+                return state
+            elif not testbench_code:
+                state["error"] = "Testbench code not found"
                 return state
 
             state["generated_code"] = design_code
@@ -268,7 +497,8 @@ class SystemVerilogCodeGenerator:
         """
         try:
             result = generate_env_file_tool.invoke({
-                "generated_code": state["generated_code"]
+                "generated_code": state["generated_code"],
+                "output_dir": state["output_dir"],
             })
             state["env_content"] = result["env_content"]
             if result["error"]:
@@ -312,9 +542,77 @@ class SystemVerilogCodeGenerator:
                 state["messages"].append(AIMessage(content=message))
             if result["error"]:
                 state["error"] = result["error"]
+            else:
+                # Store the module directory and saved files for later use
+                state["module_dir"] = result.get("module_dir", "")
+                state["saved_files"] = result.get("saved_files", {})
         except Exception as error:
             state["error"] = f"Error calling save code tool: {str(error)}"
         return state
+
+    def load_existing_code(self, module_dir: str) -> Dict[str, Any]:
+        """
+        Load existing SystemVerilog code from saved files.
+
+        Args:
+            module_dir: Directory containing the saved SystemVerilog files.
+
+        Returns:
+            Dict: Contains loaded code and any error messages.
+        """
+        try:
+            result = load_saved_code_tool.invoke({"module_dir": module_dir})
+            return result
+        except Exception as error:
+            return {
+                "design_code": "",
+                "testbench_code": "",
+                "env_content": "",
+                "module_name": "",
+                "error": f"Error loading existing code: {str(error)}",
+            }
+
+    def run_simulation_on_existing(self, module_dir: str) -> Dict[str, Any]:
+        """
+        Run simulation on existing saved code.
+
+        Args:
+            module_dir: Directory containing the saved SystemVerilog files.
+
+        Returns:
+            Dict: Contains simulation results and any error messages.
+        """
+        try:
+            # First verify the files exist
+            if not os.path.exists(module_dir):
+                return {
+                    "success": False,
+                    "error": f"Module directory does not exist: {module_dir}",
+                }
+
+            # Check for required files
+            env_file = os.path.join(module_dir, ".env")
+            if not os.path.exists(env_file):
+                return {
+                    "success": False,
+                    "error": f"Environment file not found: {env_file}",
+                }
+
+            # Run simulation
+            result = run_simulation_tool.invoke({
+                "target_dir": module_dir,
+                "strip_lines": True,
+            })
+
+            return result
+
+        except Exception as error:
+            return {
+                "success": False,
+                "return_code": -1,
+                "message": f"Error running simulation: {str(error)}",
+                "error": str(error),
+            }
 
     def generate(
         self,
@@ -333,7 +631,7 @@ class SystemVerilogCodeGenerator:
         Returns:
             Dict:
                 Contains success, design_code, testbench_code, env_content,
-                error, messages.
+                error, messages, and saved_files.
         """
         initial_state = {
             "user_request": user_request,
@@ -343,7 +641,10 @@ class SystemVerilogCodeGenerator:
             "messages": [HumanMessage(content=user_request)],
             "error": "",
             "output_dir": output_dir,
+            "module_dir": "",
+            "saved_files": {},
         }
+
         if save_file:
             # Ensure output directory exists
             try:
@@ -359,6 +660,7 @@ class SystemVerilogCodeGenerator:
                     "env_content": "",
                     "error": initial_state["error"],
                     "messages": initial_state["messages"],
+                    "saved_files": {},
                 }
             result = self.graph.invoke(initial_state)
         else:
@@ -378,6 +680,8 @@ class SystemVerilogCodeGenerator:
             "env_content": result["env_content"],
             "error": result["error"],
             "messages": result["messages"],
+            "saved_files": result.get("saved_files", {}),
+            "module_dir": result.get("module_dir", ""),
         }
 
 
@@ -391,8 +695,8 @@ if __name__ == "__main__":
     # Example requests
     test_requests = [
         "Create a simple 4-bit counter module",
-        "Generate a 2-to-1 multiplexer with enable signal",
-        "Create a D flip-flop with asynchronous reset",
+        # "Generate a 2-to-1 multiplexer with enable signal",
+        # "Create a D flip-flop with asynchronous reset",
     ]
 
     for request in test_requests:
@@ -400,11 +704,45 @@ if __name__ == "__main__":
         print("=" * 60)
 
         result = generator.generate(
-            request, save_file=True, output_dir="sv_output"
+            request,
+            save_file=True,
+            output_dir="sv_output",
         )
 
         if result["success"]:
             print("✅ Design and testbench generation successful")
+            print(f"📁 Module directory: {result['module_dir']}")
+
+            # Display saved files
+            if result["saved_files"]:
+                print("📄 Saved files:")
+                for file_type, file_path in result["saved_files"].items():
+                    print(f"  - {file_type}: {file_path}")
+
+            # Test loading existing code
+            print("\n🔄 Testing code loading from saved files...")
+            loaded_result = generator.load_existing_code(result["module_dir"])
+            if loaded_result["error"]:
+                print(
+                    f"❌ Error loading saved code: {loaded_result['error']}"
+                )
+            else:
+                print("✅ Successfully loaded saved code")
+                print(f"📦 Module name: {loaded_result['module_name']}")
+
+            # Run simulation on existing code
+            print("\n🔄 Running simulation on saved code...")
+            sim_result = generator.run_simulation_on_existing(
+                result["module_dir"]
+            )
+            if sim_result.get("success", False):
+                print("✅ Simulation completed successfully")
+            else:
+                print(
+                    f"❌ Simulation failed: {
+                        sim_result.get('message', 'Unknown error')
+                    }"
+                )
         else:
             print(f"❌ Error: {result['error']}")
 
