@@ -468,53 +468,6 @@ class SystemVerilogCodeGenerator:
                 "error": f"Error loading existing code: {str(error)}",
             }
 
-    def run_simulation_on_existing(self, module_dir: str) -> Dict[str, Any]:
-        """Runs Verilator simulation on existing SystemVerilog code.
-
-        Verifies required files and executes simulation.
-
-        Args:
-            module_dir: Path to directory with SystemVerilog files and .env.
-
-        Returns:
-            Dict: Contains success status, return code, message, and error.
-
-        Raises:
-            FileNotFoundError: If directory or .env file is missing.
-            Exception: For unexpected errors during simulation.
-        """
-        try:
-            # First verify the files exist
-            if not os.path.exists(module_dir):
-                return {
-                    "success": False,
-                    "error": f"Module directory does not exist: {module_dir}",
-                }
-
-            # Check for required files
-            env_file = os.path.join(module_dir, ".env")
-            if not os.path.exists(env_file):
-                return {
-                    "success": False,
-                    "error": f"Environment file not found: {env_file}",
-                }
-
-            # Run simulation
-            result = run_simulation_tool.invoke({
-                "target_dir": module_dir,
-                "strip_lines": True,
-            })
-
-            return result
-
-        except Exception as error:
-            return {
-                "success": False,
-                "return_code": -1,
-                "message": f"Error running simulation: {str(error)}",
-                "error": str(error),
-            }
-
     def generate(
         self,
         user_request: str,
@@ -582,117 +535,6 @@ class SystemVerilogCodeGenerator:
             "module_dir": result.get("module_dir", ""),
         }
 
-    def retry_workflow(self, module_dir: str) -> Dict[str, Any]:
-        """Retries the workflow for a previously generated module.
-
-        Loads the user request from the previous run and restarts the workflow
-        from code generation, prompting for user confirmation on simulation
-        failure.
-
-        Args:
-            module_dir: Directory of the previous run containing saved files.
-
-        Returns:
-            Dict: Contains success, design_code, testbench_code, env_content,
-                error, messages, saved_files, and module_dir.
-
-        Raises:
-            FileNotFoundError: If module_dir or required files are missing.
-            Exception: For errors during workflow execution.
-        """
-        try:
-            # Load existing code to retrieve the user_request
-            load_result = self.load_existing_code(module_dir)
-            if load_result["error"]:
-                return {
-                    "success": False,
-                    "design_code": "",
-                    "testbench_code": "",
-                    "env_content": "",
-                    "error": load_result["error"],
-                    "messages": [AIMessage(content=load_result["error"])],
-                    "saved_files": {},
-                    "module_dir": module_dir,
-                }
-
-            # Use user_request from .env or infer from module name
-            user_request = load_result.get("user_request")
-            if not user_request:
-                module_name = load_result["module_name"]
-                user_request = f"Create a {module_name} module"  # Fallback
-                load_result["messages"] = [
-                    AIMessage(
-                        content=(
-                            "User request not found in .env, ",
-                            "using fallback.",
-                        )
-                    )
-                ]
-
-            messages = [HumanMessage(content=user_request)]
-
-            # Initialize state for retry
-            initial_state = {
-                "user_request": user_request,
-                "generated_code": "",
-                "testbench_code": "",
-                "env_content": "",
-                "messages": messages,
-                "error": "",
-                "output_dir": os.path.dirname(module_dir) or "output",
-                "module_dir": "",
-                "saved_files": {},
-                "user_retry_confirmed": False,
-            }
-
-            # Ensure output directory exists
-            try:
-                os.makedirs(initial_state["output_dir"], exist_ok=True)
-            except Exception as error:
-                initial_state["error"] = (
-                    f"Failed to create output directory: {str(error)}"
-                )
-                return {
-                    "success": False,
-                    "design_code": "",
-                    "testbench_code": "",
-                    "env_content": "",
-                    "error": initial_state["error"],
-                    "messages": initial_state["messages"],
-                    "saved_files": {},
-                    "module_dir": module_dir,
-                }
-
-            # Run the workflow
-            result = self.graph.invoke(initial_state)
-
-            return {
-                "success": not bool(result["error"]),
-                "design_code": result["generated_code"],
-                "testbench_code": result["testbench_code"],
-                "env_content": result["env_content"],
-                "error": result["error"],
-                "messages": result["messages"],
-                "saved_files": result.get("saved_files", {}),
-                "module_dir": result.get("module_dir", ""),
-            }
-
-        except Exception as error:
-            return {
-                "success": False,
-                "design_code": "",
-                "testbench_code": "",
-                "env_content": "",
-                "error": f"Error retrying workflow: {str(error)}",
-                "messages": [
-                    AIMessage(
-                        content=f"Error retrying workflow: {str(error)}"
-                    )
-                ],
-                "saved_files": {},
-                "module_dir": module_dir,
-            }
-
 
 if __name__ == "__main__":
     generator = SystemVerilogCodeGenerator()
@@ -748,23 +590,38 @@ if __name__ == "__main__":
                 and result["module_dir"]
             ):
                 print("\n🔄 Attempting manual retry of workflow...")
-                retry_result = generator.retry_workflow(
-                    module_dir=result["module_dir"]
+                # Load the user request for retry
+                load_result = generator.load_existing_code(
+                    result["module_dir"]
                 )
-                print(f"Retry Success: {retry_result['success']}")
-                print(
-                    f"Retry Module directory: "
-                    f"{retry_result['module_dir'] or 'Not set'}"
-                )
-                if retry_result["success"]:
-                    print("✅ Retry successful")
-                    if retry_result["saved_files"]:
-                        print("📄 Saved files after retry:")
-                        for file_type, file_path in retry_result[
-                            "saved_files"
-                        ].items():
-                            print(f"  - {file_type}: {file_path}")
+                if load_result["error"]:
+                    print(
+                        f"❌ Error loading for retry: {load_result['error']}"
+                    )
                 else:
-                    print(f"❌ Retry failed: {retry_result['error']}")
+                    user_request = (
+                        load_result["user_request"]
+                        or f"Create a {load_result['module_name']} module"
+                    )
+                    retry_result = generator.generate(
+                        user_request,
+                        output_dir=os.path.dirname(result["module_dir"])
+                        or "sv_output",
+                    )
+                    print(f"Retry Success: {retry_result['success']}")
+                    print(
+                        f"Retry Module directory: "
+                        f"{retry_result['module_dir'] or 'Not set'}"
+                    )
+                    if retry_result["success"]:
+                        print("✅ Retry successful")
+                        if retry_result["saved_files"]:
+                            print("📄 Saved files after retry:")
+                            for file_type, file_path in retry_result[
+                                "saved_files"
+                            ].items():
+                                print(f"  - {file_type}: {file_path}")
+                    else:
+                        print(f"❌ Retry failed: {retry_result['error']}")
 
         print("\n" + "=" * 60)
