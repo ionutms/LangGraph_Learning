@@ -3,7 +3,8 @@
 This module provides a SystemVerilogCodeGenerator class to generate
 SystemVerilog design and testbench code, create .env files, save
 generated files, and run Verilator simulations using a LangGraph
-workflow. It includes tools for loading and simulating existing code.
+workflow. It includes tools for loading and simulating existing code
+and supports interactive retry on simulation failure with user input.
 
 Attributes:
     LLM_MODEL: Model identifier for the language model.
@@ -98,6 +99,9 @@ class AgentState(TypedDict):
         output_dir: Directory for saving files.
         module_dir: Full path to the module-specific directory.
         saved_files: Dictionary tracking saved file paths.
+        retry_on_failure: Whether to allow retries on simulation failure.
+        retry_count: Number of retry attempts made.
+        user_retry_confirmed: Whether user confirmed retry via prompt.
     """
 
     user_request: str
@@ -109,6 +113,9 @@ class AgentState(TypedDict):
     output_dir: str
     module_dir: str
     saved_files: Dict[str, str]
+    retry_on_failure: bool
+    retry_count: int
+    user_retry_confirmed: bool
 
 
 @tool
@@ -120,7 +127,7 @@ def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
 
     Returns:
         Dict: Contains design_code, testbench_code, env_content, module_name,
-            and error message.
+            user_request, and error message.
 
     Raises:
         FileNotFoundError: If directory or required files are missing.
@@ -132,13 +139,15 @@ def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
             "testbench_code": "",
             "env_content": "",
             "module_name": "",
+            "user_request": "",
             "error": "",
         }
 
         if not os.path.exists(module_dir):
             return {
                 **result,
-                "error": f"Module directory does not exist: {module_dir}",
+                "error": f"Module directory does not exist: {module_dir}. "
+                "It may have been removed during simulation cleanup.",
             }
 
         # Find .env file to get module information
@@ -148,14 +157,17 @@ def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
                 env_content = f.read().strip()
                 result["env_content"] = env_content
 
-                # Extract module name from env content
+                # Extract module name and user request from env content
                 for line in env_content.split("\n"):
                     if line.startswith("DESIGN_FILE="):
                         design_filename = line.split("=")[1]
                         result["module_name"] = design_filename.replace(
                             ".sv", ""
                         )
-                        break
+                    elif line.startswith("USER_REQUEST="):
+                        result["user_request"] = "=".join(
+                            line.split("=")[1:]
+                        ).strip()
 
         # If no module name found from .env, try to find .sv files
         if not result["module_name"]:
@@ -202,19 +214,21 @@ def load_saved_code_tool(module_dir: str) -> Dict[str, Any]:
             "testbench_code": "",
             "env_content": "",
             "module_name": "",
+            "user_request": "",
             "error": f"Error loading saved code: {str(error)}",
         }
 
 
 @tool
 def generate_env_file_tool(
-    generated_code: str, output_dir: str = "output"
+    generated_code: str, output_dir: str = "output", user_request: str = ""
 ) -> Dict[str, Any]:
     """Generates .env file content for a SystemVerilog project.
 
     Args:
         generated_code: Design code to extract module name from.
         output_dir: Base directory for saving files (default: 'output').
+        user_request: Original user request to store in .env.
 
     Returns:
         Dict: Contains env_content and any error message.
@@ -242,6 +256,7 @@ def generate_env_file_tool(
             f"TESTBENCH_FILE={testbench_filename}",
             f"TOP_MODULE={module_name}_tb",
             f"VCD_FILE={module_name}_tb.vcd",
+            f"USER_REQUEST={user_request}",
         ]
 
         # Join lines with newlines for .env content
@@ -416,7 +431,7 @@ class SystemVerilogCodeGenerator:
         """Creates a LangGraph workflow for SystemVerilog code generation.
 
         Builds a workflow with nodes for code generation, .env creation,
-        file saving, and simulation.
+        file saving, simulation, and interactive retry on simulation failure.
 
         Returns:
             StateGraph: Compiled workflow with defined nodes and edges.
@@ -426,12 +441,52 @@ class SystemVerilogCodeGenerator:
         workflow.add_node("generate_env", self.create_env_file)
         workflow.add_node("save_code", self.save_generated_files)
         workflow.add_node("run_simulation", self.execute_simulation)
+        workflow.add_node("retry_on_failure", self.retry_on_failure)
 
         workflow.add_edge(START, "generate_code")
         workflow.add_edge("generate_code", "generate_env")
         workflow.add_edge("generate_env", "save_code")
         workflow.add_edge("save_code", "run_simulation")
-        workflow.add_edge("run_simulation", END)
+
+        # Conditional edge from run_simulation to retry_on_failure or END
+        def route_after_simulation(state: AgentState) -> str:
+            simulation_failed = (
+                bool(state["error"])
+                and "simulation" in state["error"].lower()
+            )
+            max_retries = 3
+            if (
+                simulation_failed
+                and state.get("retry_on_failure", False)
+                and state.get("retry_count", 0) < max_retries
+            ):
+                return "retry_on_failure"
+            return END
+
+        workflow.add_conditional_edges(
+            "run_simulation",
+            route_after_simulation,
+            {
+                "retry_on_failure": "retry_on_failure",
+                END: END,
+            },
+        )
+
+        # Conditional edge from retry_on_failure back to generate_code or END
+        def route_after_retry(state: AgentState) -> str:
+            # Check if user confirmed retry
+            if state.get("user_retry_confirmed", False):
+                return "generate_code"
+            return END
+
+        workflow.add_conditional_edges(
+            "retry_on_failure",
+            route_after_retry,
+            {
+                "generate_code": "generate_code",
+                END: END,
+            },
+        )
 
         return workflow.compile()
 
@@ -529,6 +584,7 @@ class SystemVerilogCodeGenerator:
             result = generate_env_file_tool.invoke({
                 "generated_code": state["generated_code"],
                 "output_dir": state["output_dir"],
+                "user_request": state["user_request"],
             })
             state["env_content"] = result["env_content"]
             if result["error"]:
@@ -598,6 +654,12 @@ class SystemVerilogCodeGenerator:
             Exception: If simulation execution fails.
         """
         try:
+            if not state["module_dir"]:
+                state["error"] = "Module directory not set for simulation"
+                state["messages"].append(
+                    AIMessage(content="Error: Module directory not set")
+                )
+                return state
             result = run_simulation_tool.invoke({
                 "target_dir": state["module_dir"],
                 "strip_lines": True,
@@ -609,6 +671,77 @@ class SystemVerilogCodeGenerator:
             state["error"] = f"Error executing simulation: {str(error)}"
         return state
 
+    def retry_on_failure(self, state: AgentState) -> AgentState:
+        """Prompts user to retry the workflow if simulation fails.
+
+        Asks for user input (Enter to retry, 'exit' to stop) if retry is
+        allowed and the retry limit is not reached.
+        Resets state fields for retry if confirmed.
+
+        Args:
+            state: Agent state with simulation results and retry preferences.
+
+        Returns:
+            AgentState:
+                Updated state with reset fields if retrying,
+                or unchanged if not.
+        """
+        try:
+            # Check if there was a simulation error
+            simulation_failed = (
+                bool(state["error"])
+                and "simulation" in state["error"].lower()
+            )
+
+            # Initialize retry_count if not set
+            if "retry_count" not in state:
+                state["retry_count"] = 0
+
+            # Check retry conditions: user allows retry, simulation failed,
+            # and retry limit not reached
+            if state.get("retry_on_failure", False) and simulation_failed:
+                # Prompt user for input
+                print(f"Simulation failed: {state['error']}")
+                user_input = (
+                    input("Press Enter to retry or type 'exit' to stop: ")
+                    .strip()
+                    .lower()
+                )
+
+                if user_input == "" or user_input == "enter":
+                    state["retry_count"] += 1
+                    state["messages"].append(
+                        AIMessage(content="User confirmed retry.")
+                    )
+                    # Reset fields for retry, preserve module_dir if it exists
+                    state["generated_code"] = ""
+                    state["testbench_code"] = ""
+                    state["env_content"] = ""
+                    state["error"] = ""
+                    state["saved_files"] = {}
+                    state["user_retry_confirmed"] = True
+                    return state
+                else:
+                    state["messages"].append(
+                        AIMessage(content="User chose to exit retry process.")
+                    )
+                    state["user_retry_confirmed"] = False
+                    return state
+            else:
+                if simulation_failed:
+                    state["messages"].append(
+                        AIMessage(content="No retry attempted.")
+                    )
+                state["user_retry_confirmed"] = False
+                return state
+        except Exception as error:
+            state["error"] = f"Retry decision error: {str(error)}"
+            state["messages"].append(
+                AIMessage(content=f"Error in retry decision: {str(error)}")
+            )
+            state["user_retry_confirmed"] = False
+            return state
+
     def load_existing_code(self, module_dir: str) -> Dict[str, Any]:
         """Loads existing SystemVerilog code and .env from a directory.
 
@@ -617,7 +750,7 @@ class SystemVerilogCodeGenerator:
 
         Returns:
             Dict: Contains design_code, testbench_code, env_content,
-                module_name, and error messages.
+                module_name, user_request, and error messages.
 
         Raises:
             FileNotFoundError: If directory or required files are missing.
@@ -632,6 +765,7 @@ class SystemVerilogCodeGenerator:
                 "testbench_code": "",
                 "env_content": "",
                 "module_name": "",
+                "user_request": "",
                 "error": f"Error loading existing code: {str(error)}",
             }
 
@@ -687,19 +821,25 @@ class SystemVerilogCodeGenerator:
         user_request: str,
         save_file: bool = False,
         output_dir: str = "output",
+        retry_on_failure: bool = False,
     ) -> Dict[str, Any]:
         """Generates SystemVerilog design, testbench, and .env file.
 
         Optionally saves files and runs simulation if save_file is True.
+        Supports interactive retry on simulation failure if retry_on_failure
+        is enabled.
 
         Args:
             user_request: Description of the desired SystemVerilog module.
             save_file: Whether to save generated files (default: False).
             output_dir: Directory for saving files (default: 'output').
+            retry_on_failure:
+                Whether to allow interactive retries on simulation failure
+                (default: False).
 
         Returns:
             Dict: Contains success, design_code, testbench_code, env_content,
-                error, messages, saved_files, and module_dir.
+                error, messages, saved_files, module_dir, and retry_count.
 
         Raises:
             OSError: If output directory creation fails.
@@ -715,6 +855,9 @@ class SystemVerilogCodeGenerator:
             "output_dir": output_dir,
             "module_dir": "",
             "saved_files": {},
+            "retry_on_failure": retry_on_failure,
+            "retry_count": 0,
+            "user_retry_confirmed": False,
         }
 
         if save_file:
@@ -733,10 +876,11 @@ class SystemVerilogCodeGenerator:
                     "error": initial_state["error"],
                     "messages": initial_state["messages"],
                     "saved_files": {},
+                    "module_dir": "",
+                    "retry_count": 0,
                 }
             result = self.graph.invoke(initial_state)
         else:
-            # Skip save_code and run_simulation nodes if not saving files
             workflow = StateGraph(AgentState)
             workflow.add_node("generate_code", self.generate_systemverilog)
             workflow.add_node("generate_env", self.create_env_file)
@@ -754,7 +898,132 @@ class SystemVerilogCodeGenerator:
             "messages": result["messages"],
             "saved_files": result.get("saved_files", {}),
             "module_dir": result.get("module_dir", ""),
+            "retry_count": result.get("retry_count", 0),
         }
+
+    def retry_workflow(
+        self,
+        module_dir: str,
+        retry_on_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Retries the workflow for a previously generated module.
+
+        Loads the user request from the previous run and restarts the workflow
+        from code generation, prompting for user confirmation on simulation
+        failure.
+
+        Args:
+            module_dir: Directory of the previous run containing saved files.
+            retry_on_failure:
+                Whether to allow interactive retries on simulation failure
+                (default: False).
+
+        Returns:
+            Dict: Contains success, design_code, testbench_code, env_content,
+                error, messages, saved_files, module_dir, and retry_count.
+
+        Raises:
+            FileNotFoundError: If module_dir or required files are missing.
+            Exception: For errors during workflow execution.
+        """
+        try:
+            # Load existing code to retrieve the user_request
+            load_result = self.load_existing_code(module_dir)
+            if load_result["error"]:
+                return {
+                    "success": False,
+                    "design_code": "",
+                    "testbench_code": "",
+                    "env_content": "",
+                    "error": load_result["error"],
+                    "messages": [AIMessage(content=load_result["error"])],
+                    "saved_files": {},
+                    "module_dir": module_dir,
+                    "retry_count": 0,
+                }
+
+            # Use user_request from .env or infer from module name
+            user_request = load_result.get("user_request")
+            if not user_request:
+                module_name = load_result["module_name"]
+                user_request = f"Create a {module_name} module"  # Fallback
+                load_result["messages"] = [
+                    AIMessage(
+                        content=(
+                            "User request not found in .env, ",
+                            "using fallback.",
+                        )
+                    )
+                ]
+
+            messages = [HumanMessage(content=user_request)]
+
+            # Initialize state for retry
+            initial_state = {
+                "user_request": user_request,
+                "generated_code": "",
+                "testbench_code": "",
+                "env_content": "",
+                "messages": messages,
+                "error": "",
+                "output_dir": os.path.dirname(module_dir) or "output",
+                "module_dir": "",
+                "saved_files": {},
+                "retry_on_failure": retry_on_failure,
+                "retry_count": 0,
+                "user_retry_confirmed": False,
+            }
+
+            # Ensure output directory exists
+            try:
+                os.makedirs(initial_state["output_dir"], exist_ok=True)
+            except Exception as error:
+                initial_state["error"] = (
+                    f"Failed to create output directory: {str(error)}"
+                )
+                return {
+                    "success": False,
+                    "design_code": "",
+                    "testbench_code": "",
+                    "env_content": "",
+                    "error": initial_state["error"],
+                    "messages": initial_state["messages"],
+                    "saved_files": {},
+                    "module_dir": module_dir,
+                    "retry_count": 0,
+                }
+
+            # Run the workflow
+            result = self.graph.invoke(initial_state)
+
+            return {
+                "success": not bool(result["error"]),
+                "design_code": result["generated_code"],
+                "testbench_code": result["testbench_code"],
+                "env_content": result["env_content"],
+                "error": result["error"],
+                "messages": result["messages"],
+                "saved_files": result.get("saved_files", {}),
+                "module_dir": result.get("module_dir", ""),
+                "retry_count": result.get("retry_count", 0),
+            }
+
+        except Exception as error:
+            return {
+                "success": False,
+                "design_code": "",
+                "testbench_code": "",
+                "env_content": "",
+                "error": f"Error retrying workflow: {str(error)}",
+                "messages": [
+                    AIMessage(
+                        content=f"Error retrying workflow: {str(error)}"
+                    )
+                ],
+                "saved_files": {},
+                "module_dir": module_dir,
+                "retry_count": 0,
+            }
 
 
 if __name__ == "__main__":
@@ -767,7 +1036,7 @@ if __name__ == "__main__":
     # Example requests
     test_requests = [
         "Create a simple 4-bit counter module",
-        # "Generate a 2-to-1 multiplexer with enable signal",
+        "Generate a 2-to-1 multiplexer with enable signal",
         # "Create a D flip-flop with asynchronous reset",
     ]
 
@@ -779,13 +1048,17 @@ if __name__ == "__main__":
             request,
             save_file=True,
             output_dir="sv_output",
+            retry_on_failure=True,
         )
+
+        print(f"Success: {result['success']}")
+        print(f"Module directory: {result['module_dir'] or 'Not set'}")
+        print(f"Retry attempts: {result['retry_count']}")
+        if result["error"]:
+            print(f"Error: {result['error']}")
 
         if result["success"]:
             print("✅ Design and testbench generation successful")
-            print(f"📁 Module directory: {result['module_dir']}")
-
-            # Display saved files
             if result["saved_files"]:
                 print("📄 Saved files:")
                 for file_type, file_path in result["saved_files"].items():
@@ -801,8 +1074,34 @@ if __name__ == "__main__":
             else:
                 print("✅ Successfully loaded saved code")
                 print(f"📦 Module name: {loaded_result['module_name']}")
+                print(f"📜 User request: {loaded_result['user_request']}")
 
         else:
-            print(f"❌ Error: {result['error']}")
+            print(f"❌ Generation failed: {result['error']}")
+            if (
+                "simulation" in result["error"].lower()
+                and result["module_dir"]
+            ):
+                print("\n🔄 Attempting manual retry of workflow...")
+                retry_result = generator.retry_workflow(
+                    module_dir=result["module_dir"],
+                    retry_on_failure=True,
+                )
+                print(f"Retry Success: {retry_result['success']}")
+                print(
+                    f"Retry Module directory: "
+                    f"{retry_result['module_dir'] or 'Not set'}"
+                )
+                print(f"Retry attempts: {retry_result['retry_count']}")
+                if retry_result["success"]:
+                    print("✅ Retry successful")
+                    if retry_result["saved_files"]:
+                        print("📄 Saved files after retry:")
+                        for file_type, file_path in retry_result[
+                            "saved_files"
+                        ].items():
+                            print(f"  - {file_type}: {file_path}")
+                else:
+                    print(f"❌ Retry failed: {retry_result['error']}")
 
         print("\n" + "=" * 60)
