@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 from typing import Any, Dict
 
 from langchain_core.tools import tool
@@ -293,4 +294,94 @@ def run_simulation_tool(
             "return_code": -1,
             "message": f"Error running simulation: {str(error)}",
             "error": f"Simulation tool error: {str(error)}",
+        }
+
+
+@tool
+def cleanup_files_tool(
+    module_dir: str, saved_files: Dict[str, str]
+) -> Dict[str, Any]:
+    """Remove generated files and directory when simulation fails.
+
+    This tool cleans up all generated files and the module directory
+    when a simulation fails, helping to maintain a clean workspace.
+
+    Args:
+        module_dir: Path to the module directory to remove
+        saved_files: Dictionary of saved files to remove (for verification)
+
+    Returns:
+        Dict containing:
+            - success: Boolean indicating if cleanup was successful
+            - message: Status message about cleanup operation
+            - error: Error message if cleanup failed
+            - removed_files: List of files that were removed
+            - removed_dir: Directory that was removed
+    """
+    try:
+        removed_files = []
+        removed_dir = ""
+
+        # Check if module directory exists
+        if not os.path.exists(module_dir):
+            return {
+                "success": True,
+                "message": f"Directory {module_dir} does not exist",
+                "error": "",
+                "removed_files": [],
+                "removed_dir": "",
+            }
+
+        # List files that will be removed for logging
+        if os.path.isdir(module_dir):
+            for root, dirs, files in os.walk(module_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    removed_files.append(file_path)
+
+        # Remove the entire module directory and its contents
+        shutil.rmtree(module_dir)
+        removed_dir = module_dir
+
+        message = (
+            f"Successfully cleaned up {len(removed_files)} files and ",
+            f"removed directory: {module_dir}",
+        )
+
+        return {
+            "success": True,
+            "message": message,
+            "error": "",
+            "removed_files": removed_files,
+            "removed_dir": removed_dir,
+        }
+
+    except PermissionError as e:
+        error_msg = (
+            f"Permission denied while cleaning up {module_dir}: {str(e)}"
+        )
+        return {
+            "success": False,
+            "message": "",
+            "error": error_msg,
+            "removed_files": [],
+            "removed_dir": "",
+        }
+    except FileNotFoundError as e:
+        # This shouldn't happen since we check existence, but handle it anyway
+        return {
+            "success": True,
+            "message": f"Files already removed or not found: {str(e)}",
+            "error": "",
+            "removed_files": [],
+            "removed_dir": "",
+        }
+    except Exception as e:
+        error_msg = f"Error during cleanup of {module_dir}: {str(e)}"
+        return {
+            "success": False,
+            "message": "",
+            "error": error_msg,
+            "removed_files": [],
+            "removed_dir": "",
         }

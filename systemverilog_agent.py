@@ -5,6 +5,7 @@ SystemVerilog design and testbench code, create .env files, save
 generated files, and run Verilator simulations using a LangGraph
 workflow. It includes tools for loading and simulating existing code
 and supports interactive retry on simulation failure with user input.
+Now includes cleanup functionality to remove files on simulation failure.
 
 Attributes:
     LLM_MODEL: Model identifier for the language model.
@@ -24,6 +25,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 from systemverilog_agent_tools import (
+    cleanup_files_tool,
     generate_env_file_tool,
     load_saved_code_tool,
     run_simulation_tool,
@@ -104,6 +106,7 @@ class AgentState(TypedDict):
         module_dir: Full path to the module-specific directory.
         saved_files: Dictionary tracking saved file paths.
         user_retry_confirmed: Whether user confirmed retry via prompt.
+        cleanup_performed: Whether cleanup was performed on failure.
     """
 
     user_request: str
@@ -116,6 +119,7 @@ class AgentState(TypedDict):
     module_dir: str
     saved_files: Dict[str, str]
     user_retry_confirmed: bool
+    cleanup_performed: bool
 
 
 class SystemVerilogCodeGenerator:
@@ -130,6 +134,7 @@ class SystemVerilogCodeGenerator:
             generate_env_file_tool,
             save_code_tool,
             run_simulation_tool,
+            cleanup_files_tool,
         ]
         self.llm = init_chat_model(LLM_MODEL).bind_tools(self.tools)
         self.sv_prompt = ChatPromptTemplate.from_messages([
@@ -147,6 +152,7 @@ class SystemVerilogCodeGenerator:
         workflow.add_node("generate_env", self.create_env_file)
         workflow.add_node("save_code", self.save_generated_files)
         workflow.add_node("run_simulation", self.execute_simulation)
+        workflow.add_node("cleanup_files", self.cleanup_on_failure)
         workflow.add_node("retry_on_failure", self.retry_on_failure)
 
         # Linear workflow edges
@@ -172,10 +178,13 @@ class SystemVerilogCodeGenerator:
             "run_simulation",
             route_simulation_result,
             {
-                "simulation_failed": "retry_on_failure",
+                "simulation_failed": "cleanup_files",
                 "simulation_success": END,
             },
         )
+
+        # After cleanup, go to retry decision
+        workflow.add_edge("cleanup_files", "retry_on_failure")
 
         # Conditional routing after retry decision
         def route_retry_decision(state: AgentState) -> str:
@@ -378,6 +387,55 @@ class SystemVerilogCodeGenerator:
             state["error"] = f"Error executing simulation: {str(error)}"
         return state
 
+    def cleanup_on_failure(self, state: AgentState) -> AgentState:
+        """Cleans up generated files when simulation fails.
+
+        Removes all generated files and the module directory to maintain
+        a clean workspace before offering retry option.
+
+        Args:
+            state: Agent state with module directory and saved files info.
+
+        Returns:
+            AgentState: Updated with cleanup status and messages.
+        """
+        try:
+            if not state["module_dir"]:
+                state["messages"].append(
+                    AIMessage(content="No module directory to clean up")
+                )
+                state["cleanup_performed"] = False
+                return state
+
+            result = cleanup_files_tool.invoke({
+                "module_dir": state["module_dir"],
+                "saved_files": state["saved_files"],
+            })
+
+            if result["success"]:
+                state["messages"].append(
+                    AIMessage(content=f"🧹 Cleanup: {result['message']}")
+                )
+                state["cleanup_performed"] = True
+                # Clear the module_dir and saved_files since they're gone
+                state["module_dir"] = ""
+                state["saved_files"] = {}
+            else:
+                state["messages"].append(
+                    AIMessage(content=f"❌ Cleanup failed: {result['error']}")
+                )
+                state["cleanup_performed"] = False
+                # Don't clear module_dir if cleanup failed
+
+        except Exception as error:
+            state["error"] = f"Error during cleanup: {str(error)}"
+            state["messages"].append(
+                AIMessage(content=f"❌ Cleanup error: {str(error)}")
+            )
+            state["cleanup_performed"] = False
+
+        return state
+
     def retry_on_failure(self, state: AgentState) -> AgentState:
         """Prompts user to retry the workflow if simulation fails.
 
@@ -400,8 +458,16 @@ class SystemVerilogCodeGenerator:
             )
 
             if simulation_failed:
+                # Inform user about cleanup status
+                cleanup_status = (
+                    "Files cleaned up."
+                    if state.get("cleanup_performed", False)
+                    else "Cleanup may have failed."
+                )
+                print(f"\nSimulation failed: {state['error']}")
+                print(f"Cleanup status: {cleanup_status}")
+
                 # Prompt user for input
-                print(f"Simulation failed: {state['error']}")
                 user_input = (
                     input("Press Enter to retry or type 'exit' to stop: ")
                     .strip()
@@ -410,14 +476,18 @@ class SystemVerilogCodeGenerator:
 
                 if user_input == "" or user_input == "enter":
                     state["messages"].append(
-                        AIMessage(content="User confirmed retry.")
+                        AIMessage(
+                            content="User confirmed retry after cleanup."
+                        )
                     )
-                    # Reset fields for retry, preserve module_dir if it exists
+                    # Reset fields for retry
                     state["generated_code"] = ""
                     state["testbench_code"] = ""
                     state["env_content"] = ""
                     state["error"] = ""
                     state["saved_files"] = {}
+                    state["cleanup_performed"] = False
+                    # Note: module_dir should already be cleared by cleanup
                     state["user_retry_confirmed"] = True
                     return state
                 else:
@@ -427,10 +497,11 @@ class SystemVerilogCodeGenerator:
                     state["user_retry_confirmed"] = False
                     return state
             else:
-                if simulation_failed:
-                    state["messages"].append(
-                        AIMessage(content="No retry attempted.")
+                state["messages"].append(
+                    AIMessage(
+                        content="No retry needed - simulation succeeded."
                     )
+                )
                 state["user_retry_confirmed"] = False
                 return state
         except Exception as error:
@@ -476,7 +547,7 @@ class SystemVerilogCodeGenerator:
         """Generates SystemVerilog design, testbench, and .env file.
 
         Always saves files and runs simulation with interactive retry
-        on simulation failure.
+        on simulation failure. Includes cleanup on failure.
 
         Args:
             user_request: Description of the desired SystemVerilog module.
@@ -484,7 +555,8 @@ class SystemVerilogCodeGenerator:
 
         Returns:
             Dict: Contains success, design_code, testbench_code, env_content,
-                error, messages, saved_files, and module_dir.
+                error, messages, saved_files, module_dir,
+                and cleanup_performed.
 
         Raises:
             OSError: If output directory creation fails.
@@ -501,6 +573,7 @@ class SystemVerilogCodeGenerator:
             "module_dir": "",
             "saved_files": {},
             "user_retry_confirmed": False,
+            "cleanup_performed": False,
         }
 
         # Ensure output directory exists
@@ -519,6 +592,7 @@ class SystemVerilogCodeGenerator:
                 "messages": initial_state["messages"],
                 "saved_files": {},
                 "module_dir": "",
+                "cleanup_performed": False,
             }
 
         # Always use the full workflow (save files and run simulation)
@@ -533,6 +607,7 @@ class SystemVerilogCodeGenerator:
             "messages": result["messages"],
             "saved_files": result.get("saved_files", {}),
             "module_dir": result.get("module_dir", ""),
+            "cleanup_performed": result.get("cleanup_performed", False),
         }
 
 
@@ -546,8 +621,8 @@ if __name__ == "__main__":
     # Example requests
     test_requests = [
         "Create a simple 4-bit counter module",
-        # "Generate a 2-to-1 multiplexer with enable signal",
-        # "Create a D flip-flop with asynchronous reset",
+        "Generate a 2-to-1 multiplexer with enable signal",
+        "Create a D flip-flop with asynchronous reset",
     ]
 
     for request in test_requests:
@@ -561,6 +636,8 @@ if __name__ == "__main__":
 
         print(f"Success: {result['success']}")
         print(f"Module directory: {result['module_dir'] or 'Not set'}")
+        print(f"Cleanup performed: {result['cleanup_performed']}")
+
         if result["error"]:
             print(f"Error: {result['error']}")
 
@@ -585,43 +662,13 @@ if __name__ == "__main__":
 
         else:
             print(f"❌ Generation failed: {result['error']}")
-            if (
-                "simulation" in result["error"].lower()
-                and result["module_dir"]
-            ):
-                print("\n🔄 Attempting manual retry of workflow...")
-                # Load the user request for retry
-                load_result = generator.load_existing_code(
-                    result["module_dir"]
-                )
-                if load_result["error"]:
-                    print(
-                        f"❌ Error loading for retry: {load_result['error']}"
-                    )
-                else:
-                    user_request = (
-                        load_result["user_request"]
-                        or f"Create a {load_result['module_name']} module"
-                    )
-                    retry_result = generator.generate(
-                        user_request,
-                        output_dir=os.path.dirname(result["module_dir"])
-                        or "sv_output",
-                    )
-                    print(f"Retry Success: {retry_result['success']}")
-                    print(
-                        f"Retry Module directory: "
-                        f"{retry_result['module_dir'] or 'Not set'}"
-                    )
-                    if retry_result["success"]:
-                        print("✅ Retry successful")
-                        if retry_result["saved_files"]:
-                            print("📄 Saved files after retry:")
-                            for file_type, file_path in retry_result[
-                                "saved_files"
-                            ].items():
-                                print(f"  - {file_type}: {file_path}")
-                    else:
-                        print(f"❌ Retry failed: {retry_result['error']}")
+            if result["cleanup_performed"]:
+                print("🧹 Files were cleaned up after failure")
+
+            # Since cleanup removed the files, we can't test loading or retry
+            # in the same way as before
+            print(
+                "Files have been cleaned up, ready for fresh retry if needed"
+            )
 
         print("\n" + "=" * 60)
