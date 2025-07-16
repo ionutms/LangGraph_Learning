@@ -27,7 +27,6 @@ from typing_extensions import TypedDict
 from systemverilog_agent_tools import (
     cleanup_files_tool,
     generate_env_file_tool,
-    load_saved_code_tool,
     run_simulation_tool,
     save_code_tool,
 )
@@ -130,7 +129,6 @@ class SystemVerilogCodeGenerator:
         SystemVerilog code and testbenches per standards.
         """
         self.tools = [
-            load_saved_code_tool,
             generate_env_file_tool,
             save_code_tool,
             run_simulation_tool,
@@ -512,33 +510,6 @@ class SystemVerilogCodeGenerator:
             state["user_retry_confirmed"] = False
             return state
 
-    def load_existing_code(self, module_dir: str) -> Dict[str, Any]:
-        """Loads existing SystemVerilog code and .env from a directory.
-
-        Args:
-            module_dir: Path to directory with SystemVerilog files and .env.
-
-        Returns:
-            Dict: Contains design_code, testbench_code, env_content,
-                module_name, user_request, and error messages.
-
-        Raises:
-            FileNotFoundError: If directory or required files are missing.
-            Exception: For unexpected errors during file loading.
-        """
-        try:
-            result = load_saved_code_tool.invoke({"module_dir": module_dir})
-            return result
-        except Exception as error:
-            return {
-                "design_code": "",
-                "testbench_code": "",
-                "env_content": "",
-                "module_name": "",
-                "user_request": "",
-                "error": f"Error loading existing code: {str(error)}",
-            }
-
     def generate(
         self,
         user_request: str,
@@ -647,26 +618,11 @@ if __name__ == "__main__":
                 print("📄 Saved files:")
                 for file_type, file_path in result["saved_files"].items():
                     print(f"  - {file_type}: {file_path}")
-
-            # Test loading existing code
-            print("\n🔄 Testing code loading from saved files...")
-            loaded_result = generator.load_existing_code(result["module_dir"])
-            if loaded_result["error"]:
-                print(
-                    f"❌ Error loading saved code: {loaded_result['error']}"
-                )
-            else:
-                print("✅ Successfully loaded saved code")
-                print(f"📦 Module name: {loaded_result['module_name']}")
-                print(f"📜 User request: {loaded_result['user_request']}")
-
         else:
             print(f"❌ Generation failed: {result['error']}")
             if result["cleanup_performed"]:
                 print("🧹 Files were cleaned up after failure")
 
-            # Since cleanup removed the files, we can't test loading or retry
-            # in the same way as before
             print(
                 "Files have been cleaned up, ready for fresh retry if needed"
             )
