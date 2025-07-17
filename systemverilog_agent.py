@@ -42,6 +42,19 @@ You are an expert SystemVerilog code generator.
 Generate clean, well-structured SystemVerilog code based on user requirements.
 Adapt the code for Verilator.
 
+**Important Path Generation Requirements**:
+  - Based on the user request, generate an appropriate directory path
+  - Use format: "Chapter_X_examples/example_Y_design_name" where:
+    - X is the chapter number (infer from context or use appropriate number)
+    - Y is the example number within that chapter
+    - design_name is the module name or descriptive name
+  - Examples:
+    - "Chapter_1_examples/example_1_four_bit_counter"
+    - "Chapter_2_examples/example_3_mux_2to1_with_enable"
+    - "Chapter_3_examples/example_5_dff_async_reset"
+  - If no specific chapter is mentioned, use Chapter_1_examples
+  - Make the path descriptive and logical based on the design complexity
+
 **Coding Standards**:
   - Maximum 80 chars per line.
   - Use 2-space indent.
@@ -53,9 +66,12 @@ Adapt the code for Verilator.
   - Adapt the code for Verilator
 
 **Requirements**:
-  1. **Design Module**:
+  1. **Directory Path**:
+     - Generate an appropriate directory path
+     - Use the format: Chapter_X_examples/example_Y_design_name
+  2. **Design Module**:
      - Create a complete, compilable SystemVerilog module.
-  2. **Testbench Module**:
+  3. **Testbench Module**:
      - Instantiate the design module.
      - Provide stimulus (e.g., clock, reset, inputs).
      - Include basic verification (e.g., output checks, result display).
@@ -85,14 +101,18 @@ Adapt the code for Verilator.
   - Make messages clear and descriptive to help with debugging
 
 **Output Format**:
-  - Provide exactly two code blocks in order:
-    - ```systemverilog design
-      <Design module code here>
-      ```
-    - ```systemverilog testbench
-      <Testbench module code here>
-      ```
-  - Ensure both blocks are present and correctly labeled.
+  - Provide exactly three items in order:
+    1. **Directory Path**: A single line with the suggested directory path
+       Format: DIRECTORY_PATH: Chapter_X_examples/example_Y_design_name
+    2. **Design Code Block**:
+       ```systemverilog design
+       <Design module code here>
+       ```
+    3. **Testbench Code Block**:
+       ```systemverilog testbench
+       <Testbench module code here>
+       ```
+  - Ensure all three items are present and correctly formatted.
   - Do not include other code blocks or markers.
 """
 
@@ -105,9 +125,10 @@ class AgentState(TypedDict):
         generated_code: Generated SystemVerilog design code.
         testbench_code: Generated testbench code.
         env_content: Generated .env file content.
+        generated_path: LLM-generated directory path for the module.
         messages: List of conversation messages.
         error: Any error messages during code generation.
-        output_dir: Directory for saving files.
+        output_dir: Base directory for saving files.
         module_dir: Full path to the module-specific directory.
         saved_files: Dictionary tracking saved file paths.
         user_retry_confirmed: Whether user confirmed retry via prompt.
@@ -124,6 +145,7 @@ class AgentState(TypedDict):
     generated_code: str
     testbench_code: str
     env_content: str
+    generated_path: str
     messages: Annotated[list, add_messages]
     error: str
     output_dir: str
@@ -251,14 +273,15 @@ class SystemVerilogCodeGenerator:
     def generate_systemverilog(self, state: AgentState) -> AgentState:
         """Generates SystemVerilog design and testbench code.
 
-        Uses LLM to generate code per standards, extracting design and
-        testbench code blocks.
+        Uses LLM to generate code per standards, extracting directory path,
+        design and testbench code blocks.
 
         Args:
             state: Agent state with user request and other data.
 
         Returns:
-            AgentState: Updated with generated code, testbench, messages.
+            AgentState:
+                Updated with generated code, testbench, path, messages.
 
         Raises:
             Exception: If code generation or extraction fails.
@@ -270,6 +293,14 @@ class SystemVerilogCodeGenerator:
             ]
             response = self.llm.invoke(messages)
             content = response.content
+
+            # Extract directory path
+            generated_path = ""
+            path_match = re.search(
+                r"DIRECTORY_PATH:\s*(.+)", content, re.IGNORECASE
+            )
+            if path_match:
+                generated_path = path_match.group(1).strip()
 
             # Extract code blocks
             design_code = ""
@@ -291,6 +322,7 @@ class SystemVerilogCodeGenerator:
             if testbench_match:
                 testbench_code = testbench_match.group(1).strip()
 
+            # Fallback to generic code blocks if specific ones not found
             if not design_code and not testbench_code:
                 code_blocks = re.findall(
                     r"```systemverilog\s*\n(.*?)```", content, re.DOTALL
@@ -312,13 +344,28 @@ class SystemVerilogCodeGenerator:
                 state["error"] = "Testbench code not found"
                 return state
 
+            # Use generated path or fallback to default
+            if not generated_path:
+                # Extract module name for fallback path
+                module_match = re.search(r"module\s+(\w+)", design_code)
+                module_name = (
+                    module_match.group(1)
+                    if module_match
+                    else "generated_module"
+                )
+                generated_path = (
+                    f"Chapter_1_examples/example_1__{module_name}"
+                )
+
             state["generated_code"] = design_code
             state["testbench_code"] = testbench_code
+            state["generated_path"] = generated_path
             state["messages"].append(
                 AIMessage(
                     content=(
                         f"Generated SystemVerilog design and testbench "
-                        f"for: {state['user_request']}"
+                        f"for: {state['user_request']} "
+                        f"(Path: {generated_path})"
                     )
                 )
             )
@@ -329,10 +376,10 @@ class SystemVerilogCodeGenerator:
     def create_env_file(self, state: AgentState) -> AgentState:
         """Generates .env file content using generate_env_file_tool.
 
-        Extracts module name from code and creates .env with project config.
+        Uses the LLM-generated path to create .env with project config.
 
         Args:
-            state: Agent state with generated code and output directory.
+            state: Agent state with generated code and path.
 
         Returns:
             AgentState: Updated with .env content and status messages.
@@ -341,9 +388,12 @@ class SystemVerilogCodeGenerator:
             Exception: If .env file generation fails.
         """
         try:
+            # Use forward slashes for the path
+            full_output_path = state["generated_path"]
+
             result = generate_env_file_tool.invoke({
                 "generated_code": state["generated_code"],
-                "output_dir": state["output_dir"],
+                "output_dir": full_output_path,
             })
             state["env_content"] = result["env_content"]
             if result["error"]:
@@ -358,7 +408,10 @@ class SystemVerilogCodeGenerator:
                 )
                 state["messages"].append(
                     AIMessage(
-                        content=f"Generated .env file for {module_name}"
+                        content=(
+                            f"Generated .env file for {module_name} in ",
+                            "{state['generated_path']}",
+                        )
                     )
                 )
         except Exception as error:
@@ -368,7 +421,7 @@ class SystemVerilogCodeGenerator:
     def save_generated_files(self, state: AgentState) -> AgentState:
         """Saves generated code and .env using save_code_tool.
 
-        Stores design, testbench, and .env files in a module-specific dir.
+        Stores design, testbench, and .env files in the LLM-generated path.
         If module_dir already exists (from regeneration), uses the same
         directory.
 
@@ -382,12 +435,15 @@ class SystemVerilogCodeGenerator:
             Exception: If file saving fails due to I/O or other errors.
         """
         try:
+            # Use forward slashes for the path
+            full_output_path = state["generated_path"]
+
             # Pass existing module_dir if available (for regeneration)
             save_params = {
                 "design_code": state["generated_code"],
                 "testbench_code": state["testbench_code"],
                 "env_content": state["env_content"],
-                "output_dir": state["output_dir"],
+                "output_dir": full_output_path,
             }
 
             # If we have an existing module_dir, use it for regeneration
@@ -533,6 +589,10 @@ class SystemVerilogCodeGenerator:
                 print(f"\nSimulation failed: {state['error']}")
                 print(f"Cleanup status: {cleanup_status}")
                 print(
+                    "Generated path: "
+                    + f"{state.get('generated_path', 'Not set')}",
+                )
+                print(
                     f"Retry attempt {state['retry_count']} of "
                     f"{state['max_retries']}"
                 )
@@ -556,6 +616,7 @@ class SystemVerilogCodeGenerator:
                     state["generated_code"] = ""
                     state["testbench_code"] = ""
                     state["env_content"] = ""
+                    state["generated_path"] = ""
                     state["error"] = ""
                     state["saved_files"] = {}
                     state["cleanup_performed"] = False
@@ -625,6 +686,10 @@ class SystemVerilogCodeGenerator:
 
             if simulation_succeeded:
                 print("\n✅ Simulation successful!")
+                print(
+                    "Generated path: "
+                    + f"{state.get('generated_path', 'Not set')}"
+                )
                 print(f"Module directory: {state['module_dir']}")
                 print(f"Generated files: {list(state['saved_files'].keys())}")
                 print(
@@ -655,6 +720,7 @@ class SystemVerilogCodeGenerator:
                     state["generated_code"] = ""
                     state["testbench_code"] = ""
                     state["env_content"] = ""
+                    state["generated_path"] = ""
                     state["error"] = ""
                     # Keep module_dir and saved_files for reuse
                     state["user_regenerate_confirmed"] = True
@@ -689,7 +755,7 @@ class SystemVerilogCodeGenerator:
     def generate(
         self,
         user_request: str,
-        output_dir: str = "output",
+        output_dir: str = ".",
         recursion_limit: int = 50,
         max_retries: int = 5,
         max_regenerations: int = 5,
@@ -700,10 +766,11 @@ class SystemVerilogCodeGenerator:
         on simulation failure and regeneration option on success.
         Includes cleanup on failure. Configurable recursion limit and
         max retries/regenerations to prevent infinite loops.
+        Now uses LLM-generated directory paths.
 
         Args:
             user_request: Description of the desired SystemVerilog module.
-            output_dir: Directory for saving files (default: 'output').
+            output_dir: Base directory for saving files (default: '.').
             recursion_limit: Maximum recursion limit for LangGraph
                 (default: 50).
             max_retries: Maximum number of retry attempts (default: 5).
@@ -712,7 +779,7 @@ class SystemVerilogCodeGenerator:
 
         Returns:
             Dict: Contains success, design_code, testbench_code, env_content,
-                error, messages, saved_files, module_dir,
+                generated_path, error, messages, saved_files, module_dir,
                 cleanup_performed, and user_regenerate_confirmed.
 
         Raises:
@@ -724,6 +791,7 @@ class SystemVerilogCodeGenerator:
             "generated_code": "",
             "testbench_code": "",
             "env_content": "",
+            "generated_path": "",
             "messages": [HumanMessage(content=user_request)],
             "error": "",
             "output_dir": output_dir,
@@ -750,6 +818,7 @@ class SystemVerilogCodeGenerator:
                 "design_code": "",
                 "testbench_code": "",
                 "env_content": "",
+                "generated_path": "",
                 "error": initial_state["error"],
                 "messages": initial_state["messages"],
                 "saved_files": {},
@@ -770,6 +839,7 @@ class SystemVerilogCodeGenerator:
             "design_code": result["generated_code"],
             "testbench_code": result["testbench_code"],
             "env_content": result["env_content"],
+            "generated_path": result.get("generated_path", ""),
             "error": result["error"],
             "messages": result["messages"],
             "saved_files": result.get("saved_files", {}),
@@ -796,9 +866,12 @@ if __name__ == "__main__":
 
     # Example requests
     test_requests = [
-        "Create a simple 4-bit counter module, name it 'four_bit_counter'",
-        "Generate a 2-to-1 multiplexer with enable signal, name it 'mux_2to1",
-        "Create a D flip-flop with asynchronous reset, name the module 'dff'",
+        "Create a simple 4-bit counter module, "
+        + "name it 'four_bit_counter' this is for chapter 1, example 1",
+        "Generate a 2-to-1 multiplexer with enable signal, "
+        + "name it 'mux_2to1', chapter 2, example 2",
+        "Create a D flip-flop with asynchronous reset, "
+        + "name the module 'dff', chapter 3, example 3",
     ]
 
     if user_input == "n":
@@ -811,7 +884,7 @@ if __name__ == "__main__":
 
         result = generator.generate(
             request,
-            output_dir="sv_output",
+            output_dir=".",
             recursion_limit=200,
             max_retries=10,
             max_regenerations=10,

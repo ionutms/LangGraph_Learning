@@ -32,7 +32,7 @@ def generate_env_file_tool(
         )
 
         # Create relative path to the module directory
-        module_relative_path = f"./{output_dir}/{module_name}"
+        module_relative_path = f"./{output_dir}"
 
         design_filename = f"{module_name}.sv"
         testbench_filename = f"{module_name}_tb.sv"
@@ -63,14 +63,16 @@ def save_code_tool(
     testbench_code: str,
     env_content: str,
     output_dir: str = "output",
+    existing_module_dir: str = "",
 ) -> Dict[str, Any]:
-    """Saves SystemVerilog code and .env to a module-specific directory.
+    """Saves SystemVerilog code and .env to the specified directory.
 
     Args:
         design_code: Generated SystemVerilog design code.
         testbench_code: Generated testbench code.
         env_content: Generated .env file content.
-        output_dir: Base directory for saving files (default: 'output').
+        output_dir: Directory path for saving files (default: 'output').
+        existing_module_dir: Existing module directory for regeneration.
 
     Returns:
         Dict: Contains status messages, saved file paths, module_dir,
@@ -89,8 +91,11 @@ def save_code_tool(
             module_match.group(1) if module_match else "generated_module"
         )
 
-        # Create module-specific directory
-        module_dir = os.path.join(output_dir, module_name)
+        # Use existing module directory if provided,
+        # otherwise use output_dir directly
+        module_dir = (
+            existing_module_dir if existing_module_dir else output_dir
+        )
         os.makedirs(module_dir, exist_ok=True)
 
         # Save design code
