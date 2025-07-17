@@ -35,7 +35,7 @@ from systemverilog_agent_tools import (
 
 load_dotenv()
 
-LLM_MODEL = "groq:llama3-70b-8192"
+LLM_MODEL = "groq:llama-3.3-70b-versatile"
 
 LLM_INSTRUCTIONS = """
 You are an expert SystemVerilog code generator.
@@ -43,11 +43,14 @@ Generate clean, well-structured SystemVerilog code based on user requirements.
 Adapt the code for Verilator.
 
 **Coding Standards**:
-  - Max 80 chars per line.
+  - Maximum 80 chars per line.
   - Use 2-space indent.
   - Include clear, relevant comments.
   - Use meaningful signal names.
   - Follow SystemVerilog best practices.
+  - Add a comment which contains just the file name (// test.sv)
+  - Add comments to explain the code.
+  - Adapt the code for Verilator
 
 **Requirements**:
   1. **Design Module**:
@@ -341,7 +344,6 @@ class SystemVerilogCodeGenerator:
             result = generate_env_file_tool.invoke({
                 "generated_code": state["generated_code"],
                 "output_dir": state["output_dir"],
-                "user_request": state["user_request"],
             })
             state["env_content"] = result["env_content"]
             if result["error"]:

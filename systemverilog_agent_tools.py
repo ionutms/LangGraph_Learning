@@ -10,14 +10,13 @@ from verilator_runner import run_docker_compose
 
 @tool
 def generate_env_file_tool(
-    generated_code: str, output_dir: str = "output", user_request: str = ""
+    generated_code: str, output_dir: str = "output"
 ) -> Dict[str, Any]:
     """Generates .env file content for a SystemVerilog project.
 
     Args:
         generated_code: Design code to extract module name from.
         output_dir: Base directory for saving files (default: 'output').
-        user_request: Original user request to store in .env.
 
     Returns:
         Dict: Contains env_content and any error message.
@@ -45,7 +44,6 @@ def generate_env_file_tool(
             f"TESTBENCH_FILE={testbench_filename}",
             f"TOP_MODULE={module_name}_tb",
             f"VCD_FILE={module_name}_tb.vcd",
-            f"USER_REQUEST={user_request}",
         ]
 
         # Join lines with newlines for .env content
