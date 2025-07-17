@@ -791,12 +791,20 @@ if __name__ == "__main__":
     print(generator.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60)
 
+    user_input = input(
+        "Run demo test requests or provide you prompt? (y/n)\n"
+    )
+
     # Example requests
     test_requests = [
         "Create a simple 4-bit counter module, name it 'four_bit_counter'",
         "Generate a 2-to-1 multiplexer with enable signal, name it 'mux_2to1",
         "Create a D flip-flop with asynchronous reset, name the module 'dff'",
     ]
+
+    if user_input == "n":
+        user_request = input("Enter your request:\n")
+        test_requests = [user_request]
 
     for request in test_requests:
         print(f"\nRequest: {request}")
