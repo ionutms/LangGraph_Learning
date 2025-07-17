@@ -49,7 +49,7 @@ Adapt the code for Verilator.
   - Use meaningful signal names.
   - Follow SystemVerilog best practices.
   - Add a comment which contains just the file name (// test.sv)
-  - Add comments to explain the code.
+  - Add comments to explain the code like for an absolute.
   - Adapt the code for Verilator
 
 **Requirements**:
@@ -492,7 +492,7 @@ class SystemVerilogCodeGenerator:
     def retry_on_failure(self, state: AgentState) -> AgentState:
         """Prompts user to retry the workflow if simulation fails.
 
-        Asks for user input (Enter to retry, 'exit' to stop) and resets
+        Asks for user input (Enter to retry, 'q' to quit) and resets
         state fields for retry if confirmed. Increments retry_count and
         checks against max_retries.
 
@@ -538,7 +538,7 @@ class SystemVerilogCodeGenerator:
                 )
 
                 user_input = (
-                    input("Press Enter to retry or type 'exit' to stop: ")
+                    input("Press Enter to retry or 'q' to quit: ")
                     .strip()
                     .lower()
                 )
@@ -547,7 +547,7 @@ class SystemVerilogCodeGenerator:
                     state["messages"].append(
                         AIMessage(
                             content=(
-                                f"Retry {state['retry_count']} confirmed"
+                                f"Retry {state['retry_count']} confirmed "
                                 f"after cleanup."
                             )
                         )
@@ -564,7 +564,7 @@ class SystemVerilogCodeGenerator:
                     return state
                 else:
                     state["messages"].append(
-                        AIMessage(content="User chose to exit retry process.")
+                        AIMessage(content="User chose to quit retry process.")
                     )
                     state["user_retry_confirmed"] = False
                     return state
@@ -634,10 +634,7 @@ class SystemVerilogCodeGenerator:
 
                 # Prompt user for regeneration
                 user_input = (
-                    input(
-                        "Press Enter to regenerate code (same files/folder) "
-                        "or type 'exit' to stop: "
-                    )
+                    input("Press Enter to regenerate code or 'q' to quit: ")
                     .strip()
                     .lower()
                 )
@@ -666,7 +663,7 @@ class SystemVerilogCodeGenerator:
                 else:
                     state["messages"].append(
                         AIMessage(
-                            content="User chose to exit regeneration process."
+                            content="User chose to quit regeneration process."
                         )
                     )
                     state["user_regenerate_confirmed"] = False
