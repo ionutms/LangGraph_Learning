@@ -5,7 +5,9 @@ SystemVerilog design and testbench code, create .env files, save
 generated files, and run Verilator simulations using a LangGraph
 workflow. It includes tools for loading and simulating existing code
 and supports interactive retry on simulation failure with user input.
-Now includes cleanup functionality to remove files on simulation failure.
+Now includes cleanup functionality to remove files on simulation failure
+and regeneration capability after successful simulation. Adds recursion
+limit and max retries/regenerations to prevent infinite loops.
 
 Attributes:
     LLM_MODEL: Model identifier for the language model.
@@ -38,6 +40,7 @@ LLM_MODEL = "groq:llama3-70b-8192"
 LLM_INSTRUCTIONS = """
 You are an expert SystemVerilog code generator.
 Generate clean, well-structured SystemVerilog code based on user requirements.
+Adapt the code for Verilator.
 
 **Coding Standards**:
   - Max 80 chars per line.
@@ -106,6 +109,12 @@ class AgentState(TypedDict):
         saved_files: Dictionary tracking saved file paths.
         user_retry_confirmed: Whether user confirmed retry via prompt.
         cleanup_performed: Whether cleanup was performed on failure.
+        user_regenerate_confirmed: Whether user confirmed regeneration
+            after success.
+        retry_count: Number of retry attempts made.
+        regeneration_count: Number of regeneration attempts made.
+        max_retries: Maximum allowed retries.
+        max_regenerations: Maximum allowed regenerations.
     """
 
     user_request: str
@@ -119,6 +128,11 @@ class AgentState(TypedDict):
     saved_files: Dict[str, str]
     user_retry_confirmed: bool
     cleanup_performed: bool
+    user_regenerate_confirmed: bool
+    retry_count: int
+    regeneration_count: int
+    max_retries: int
+    max_regenerations: int
 
 
 class SystemVerilogCodeGenerator:
@@ -129,10 +143,10 @@ class SystemVerilogCodeGenerator:
         SystemVerilog code and testbenches per standards.
         """
         self.tools = [
-            generate_env_file_tool,
-            save_code_tool,
-            run_simulation_tool,
             cleanup_files_tool,
+            generate_env_file_tool,
+            run_simulation_tool,
+            save_code_tool,
         ]
         self.llm = init_chat_model(LLM_MODEL).bind_tools(self.tools)
         self.sv_prompt = ChatPromptTemplate.from_messages([
@@ -152,6 +166,7 @@ class SystemVerilogCodeGenerator:
         workflow.add_node("run_simulation", self.execute_simulation)
         workflow.add_node("cleanup_files", self.cleanup_on_failure)
         workflow.add_node("retry_on_failure", self.retry_on_failure)
+        workflow.add_node("regenerate_on_success", self.regenerate_on_success)
 
         # Linear workflow edges
         workflow.add_edge(START, "generate_code")
@@ -177,7 +192,7 @@ class SystemVerilogCodeGenerator:
             route_simulation_result,
             {
                 "simulation_failed": "cleanup_files",
-                "simulation_success": END,
+                "simulation_success": "regenerate_on_success",
             },
         )
 
@@ -186,7 +201,9 @@ class SystemVerilogCodeGenerator:
 
         # Conditional routing after retry decision
         def route_retry_decision(state: AgentState) -> str:
-            """Routes based on user retry confirmation."""
+            """Routes based on user retry confirmation and retry limit."""
+            if state.get("retry_count", 0) >= state.get("max_retries", 5):
+                return "retry_limit_reached"
             return (
                 "user_retry_confirmed"
                 if state.get("user_retry_confirmed", False)
@@ -199,6 +216,30 @@ class SystemVerilogCodeGenerator:
             {
                 "user_retry_confirmed": "generate_code",
                 "user_exit": END,
+                "retry_limit_reached": END,
+            },
+        )
+
+        # Conditional routing after regeneration decision
+        def route_regenerate_decision(state: AgentState) -> str:
+            """Routes based on user regeneration confirmation and limit."""
+            if state.get("regeneration_count", 0) >= state.get(
+                "max_regenerations", 5
+            ):
+                return "regeneration_limit_reached"
+            return (
+                "user_regenerate_confirmed"
+                if state.get("user_regenerate_confirmed", False)
+                else "user_exit"
+            )
+
+        workflow.add_conditional_edges(
+            "regenerate_on_success",
+            route_regenerate_decision,
+            {
+                "user_regenerate_confirmed": "generate_code",
+                "user_exit": END,
+                "regeneration_limit_reached": END,
             },
         )
 
@@ -272,8 +313,10 @@ class SystemVerilogCodeGenerator:
             state["testbench_code"] = testbench_code
             state["messages"].append(
                 AIMessage(
-                    content=f"Generated SystemVerilog design and testbench "
-                    f"for: {state['user_request']}"
+                    content=(
+                        f"Generated SystemVerilog design and testbench "
+                        f"for: {state['user_request']}"
+                    )
                 )
             )
         except Exception as error:
@@ -324,6 +367,8 @@ class SystemVerilogCodeGenerator:
         """Saves generated code and .env using save_code_tool.
 
         Stores design, testbench, and .env files in a module-specific dir.
+        If module_dir already exists (from regeneration), uses the same
+        directory.
 
         Args:
             state: Agent state with code, testbench, and .env content.
@@ -335,12 +380,20 @@ class SystemVerilogCodeGenerator:
             Exception: If file saving fails due to I/O or other errors.
         """
         try:
-            result = save_code_tool.invoke({
+            # Pass existing module_dir if available (for regeneration)
+            save_params = {
                 "design_code": state["generated_code"],
                 "testbench_code": state["testbench_code"],
                 "env_content": state["env_content"],
                 "output_dir": state["output_dir"],
-            })
+            }
+
+            # If we have an existing module_dir, use it for regeneration
+            if state.get("module_dir"):
+                save_params["existing_module_dir"] = state["module_dir"]
+
+            result = save_code_tool.invoke(save_params)
+
             for message in result["messages"]:
                 state["messages"].append(AIMessage(content=message))
             if result["error"]:
@@ -438,7 +491,8 @@ class SystemVerilogCodeGenerator:
         """Prompts user to retry the workflow if simulation fails.
 
         Asks for user input (Enter to retry, 'exit' to stop) and resets
-        state fields for retry if confirmed.
+        state fields for retry if confirmed. Increments retry_count and
+        checks against max_retries.
 
         Args:
             state: Agent state with simulation results.
@@ -449,14 +503,26 @@ class SystemVerilogCodeGenerator:
                 or unchanged if not.
         """
         try:
-            # Check if there was a simulation error
+            state["retry_count"] = state.get("retry_count", 0) + 1
+
+            if state["retry_count"] >= state.get("max_retries", 5):
+                state["messages"].append(
+                    AIMessage(
+                        content=(
+                            f"Maximum retries ({state['max_retries']}) "
+                            f"reached."
+                        )
+                    )
+                )
+                state["user_retry_confirmed"] = False
+                return state
+
             simulation_failed = (
                 bool(state["error"])
                 and "simulation" in state["error"].lower()
             )
 
             if simulation_failed:
-                # Inform user about cleanup status
                 cleanup_status = (
                     "Files cleaned up."
                     if state.get("cleanup_performed", False)
@@ -464,8 +530,11 @@ class SystemVerilogCodeGenerator:
                 )
                 print(f"\nSimulation failed: {state['error']}")
                 print(f"Cleanup status: {cleanup_status}")
+                print(
+                    f"Retry attempt {state['retry_count']} of "
+                    f"{state['max_retries']}"
+                )
 
-                # Prompt user for input
                 user_input = (
                     input("Press Enter to retry or type 'exit' to stop: ")
                     .strip()
@@ -475,7 +544,10 @@ class SystemVerilogCodeGenerator:
                 if user_input == "" or user_input == "enter":
                     state["messages"].append(
                         AIMessage(
-                            content="User confirmed retry after cleanup."
+                            content=(
+                                f"Retry {state['retry_count']} confirmed"
+                                f"after cleanup."
+                            )
                         )
                     )
                     # Reset fields for retry
@@ -485,7 +557,7 @@ class SystemVerilogCodeGenerator:
                     state["error"] = ""
                     state["saved_files"] = {}
                     state["cleanup_performed"] = False
-                    # Note: module_dir should already be cleared by cleanup
+                    state["user_regenerate_confirmed"] = False
                     state["user_retry_confirmed"] = True
                     return state
                 else:
@@ -510,24 +582,139 @@ class SystemVerilogCodeGenerator:
             state["user_retry_confirmed"] = False
             return state
 
+    def regenerate_on_success(self, state: AgentState) -> AgentState:
+        """Prompts user to regenerate code after successful simulation.
+
+        Asks for user input to regenerate the code with the same file and
+        folder structure. Increments regeneration_count and checks against
+        max_regenerations.
+
+        Args:
+            state: Agent state with successful simulation results.
+
+        Returns:
+            AgentState:
+                Updated state with regeneration confirmation and
+                preserved module directory for reuse.
+        """
+        try:
+            # Increment regeneration count
+            state["regeneration_count"] = (
+                state.get("regeneration_count", 0) + 1
+            )
+
+            # Check if max regenerations reached
+            if state["regeneration_count"] >= state.get(
+                "max_regenerations", 5
+            ):
+                state["messages"].append(
+                    AIMessage(
+                        content=(
+                            f"Maximum regenerations "
+                            f"({state['max_regenerations']}) reached."
+                        )
+                    )
+                )
+                state["user_regenerate_confirmed"] = False
+                return state
+
+            # Check if simulation was successful
+            simulation_succeeded = not bool(state["error"])
+
+            if simulation_succeeded:
+                print("\n✅ Simulation successful!")
+                print(f"Module directory: {state['module_dir']}")
+                print(f"Generated files: {list(state['saved_files'].keys())}")
+                print(
+                    f"Regeneration attempt {state['regeneration_count']} of "
+                    f"{state['max_regenerations']}"
+                )
+
+                # Prompt user for regeneration
+                user_input = (
+                    input(
+                        "Press Enter to regenerate code (same files/folder) "
+                        "or type 'exit' to stop: "
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                if user_input == "" or user_input == "enter":
+                    state["messages"].append(
+                        AIMessage(
+                            content=(
+                                f"User confirmed regeneration "
+                                f"{state['regeneration_count']} after "
+                                f"successful simulation."
+                            )
+                        )
+                    )
+
+                    # Reset only the code-related fields, keep directory
+                    # structure
+                    state["generated_code"] = ""
+                    state["testbench_code"] = ""
+                    state["env_content"] = ""
+                    state["error"] = ""
+                    # Keep module_dir and saved_files for reuse
+                    state["user_regenerate_confirmed"] = True
+                    state["user_retry_confirmed"] = False
+                    return state
+                else:
+                    state["messages"].append(
+                        AIMessage(
+                            content="User chose to exit regeneration process."
+                        )
+                    )
+                    state["user_regenerate_confirmed"] = False
+                    return state
+            else:
+                state["messages"].append(
+                    AIMessage(
+                        content="No regeneration offered - simulation failed."
+                    )
+                )
+                state["user_regenerate_confirmed"] = False
+                return state
+        except Exception as error:
+            state["error"] = f"Regeneration decision error: {str(error)}"
+            state["messages"].append(
+                AIMessage(
+                    content=f"Error in regeneration decision: {str(error)}"
+                )
+            )
+            state["user_regenerate_confirmed"] = False
+            return state
+
     def generate(
         self,
         user_request: str,
         output_dir: str = "output",
+        recursion_limit: int = 50,
+        max_retries: int = 5,
+        max_regenerations: int = 5,
     ) -> Dict[str, Any]:
         """Generates SystemVerilog design, testbench, and .env file.
 
         Always saves files and runs simulation with interactive retry
-        on simulation failure. Includes cleanup on failure.
+        on simulation failure and regeneration option on success.
+        Includes cleanup on failure. Configurable recursion limit and
+        max retries/regenerations to prevent infinite loops.
 
         Args:
             user_request: Description of the desired SystemVerilog module.
             output_dir: Directory for saving files (default: 'output').
+            recursion_limit: Maximum recursion limit for LangGraph
+                (default: 50).
+            max_retries: Maximum number of retry attempts (default: 5).
+            max_regenerations: Maximum number of regeneration attempts
+                (default: 5).
 
         Returns:
             Dict: Contains success, design_code, testbench_code, env_content,
                 error, messages, saved_files, module_dir,
-                and cleanup_performed.
+                cleanup_performed, and user_regenerate_confirmed.
 
         Raises:
             OSError: If output directory creation fails.
@@ -545,6 +732,11 @@ class SystemVerilogCodeGenerator:
             "saved_files": {},
             "user_retry_confirmed": False,
             "cleanup_performed": False,
+            "user_regenerate_confirmed": False,
+            "retry_count": 0,
+            "regeneration_count": 0,
+            "max_retries": max_retries,
+            "max_regenerations": max_regenerations,
         }
 
         # Ensure output directory exists
@@ -564,10 +756,15 @@ class SystemVerilogCodeGenerator:
                 "saved_files": {},
                 "module_dir": "",
                 "cleanup_performed": False,
+                "user_regenerate_confirmed": False,
+                "retry_count": 0,
+                "regeneration_count": 0,
             }
 
         # Always use the full workflow (save files and run simulation)
-        result = self.graph.invoke(initial_state)
+        result = self.graph.invoke(
+            initial_state, config={"recursion_limit": recursion_limit}
+        )
 
         return {
             "success": not bool(result["error"]),
@@ -579,6 +776,11 @@ class SystemVerilogCodeGenerator:
             "saved_files": result.get("saved_files", {}),
             "module_dir": result.get("module_dir", ""),
             "cleanup_performed": result.get("cleanup_performed", False),
+            "user_regenerate_confirmed": result.get(
+                "user_regenerate_confirmed", False
+            ),
+            "retry_count": result.get("retry_count", 0),
+            "regeneration_count": result.get("regeneration_count", 0),
         }
 
 
@@ -591,9 +793,9 @@ if __name__ == "__main__":
 
     # Example requests
     test_requests = [
-        "Create a simple 4-bit counter module",
-        "Generate a 2-to-1 multiplexer with enable signal",
-        "Create a D flip-flop with asynchronous reset",
+        "Create a simple 4-bit counter module, name it 'four_bit_counter'",
+        "Generate a 2-to-1 multiplexer with enable signal, name it 'mux_2to1",
+        "Create a D flip-flop with asynchronous reset, name the module 'dff'",
     ]
 
     for request in test_requests:
@@ -603,11 +805,19 @@ if __name__ == "__main__":
         result = generator.generate(
             request,
             output_dir="sv_output",
+            recursion_limit=200,
+            max_retries=10,
+            max_regenerations=10,
         )
 
         print(f"Success: {result['success']}")
         print(f"Module directory: {result['module_dir'] or 'Not set'}")
         print(f"Cleanup performed: {result['cleanup_performed']}")
+        print(
+            f"Regeneration confirmed: {result['user_regenerate_confirmed']}"
+        )
+        print(f"Retry count: {result['retry_count']}")
+        print(f"Regeneration count: {result['regeneration_count']}")
 
         if result["error"]:
             print(f"Error: {result['error']}")
