@@ -175,6 +175,7 @@ class SystemVerilogCodeGenerator:
         workflow.add_edge("generate_code", "generate_env")
         workflow.add_edge("generate_env", "save_code")
         workflow.add_edge("save_code", "run_simulation")
+        workflow.add_edge("run_simulation", "simulation_result")
 
         # Add nodes
         workflow.add_node("generate_code", self.generate_systemverilog)
@@ -183,17 +184,6 @@ class SystemVerilogCodeGenerator:
         workflow.add_node("run_simulation", SVHandlers.execute_simulation)
         workflow.add_node("cleanup_files", SVHandlers.cleanup_on_failure)
         workflow.add_node("simulation_result", self.simulation_result)
-
-        # Conditional routing after simulation
-        def route_simulation_result(state: AgentState) -> str:
-            """Routes to simulation_result based on user choice."""
-            return "simulation_result"
-
-        workflow.add_conditional_edges(
-            "run_simulation",
-            route_simulation_result,
-            {"simulation_result": "simulation_result"},
-        )
 
         # Conditional routing after handling simulation result
         def route_handle_result(state: AgentState) -> str:
