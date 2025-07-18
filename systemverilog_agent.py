@@ -7,7 +7,7 @@ workflow. It supports retry on failure and regeneration on success.
 Includes cleanup on failure and limits retries/regenerations.
 
 Attributes:
-    LLM_MODEL: Model identifier for the language model.
+    LLM_MODELS: List of available LLM model identifiers.
     LLM_INSTRUCTIONS: Instructions for SystemVerilog code generation.
 """
 
@@ -27,9 +27,12 @@ from systemverilog_agent_handlers import SVHandlers
 
 load_dotenv()
 
-# LLM_MODEL = "groq:llama-3.3-70b-versatile"
-# LLM_MODEL = "groq:deepseek-r1-distill-llama-70b"
-LLM_MODEL = "groq:qwen/qwen3-32b"
+# Available LLM models for selection
+LLM_MODELS = [
+    "groq:llama-3.3-70b-versatile",
+    "groq:deepseek-r1-distill-llama-70b",
+    "groq:qwen/qwen3-32b",
+]
 
 LLM_INSTRUCTIONS = """
 You are an expert SystemVerilog code generator.
@@ -130,6 +133,7 @@ class AgentState(TypedDict):
         max_retries: Maximum allowed retries.
         max_regenerations: Maximum allowed regenerations.
         cleanup_on_retry: Whether to clean up files before retrying.
+        selected_model: The selected LLM model for code generation.
     """
 
     user_request: str
@@ -150,16 +154,23 @@ class AgentState(TypedDict):
     max_retries: int
     max_regenerations: int
     cleanup_on_retry: bool
+    selected_model: str
 
 
 class SystemVerilogCodeGenerator:
-    def __init__(self):
+    def __init__(self, model: str = LLM_MODELS[0]):
         """Initializes the SystemVerilog code generator with LLM and tools.
+
+        Args:
+            model:
+                The LLM model to use for code generation
+                (default: first model in LLM_MODELS).
 
         Sets up the language model, prompt, and workflow for generating
         SystemVerilog code and testbenches per standards.
         """
-        self.llm = init_chat_model(LLM_MODEL)
+        self.llm = init_chat_model(model)
+        self.selected_model = model
         self.sv_prompt = ChatPromptTemplate.from_messages([
             ("system", LLM_INSTRUCTIONS),
             ("human", "{user_request}"),
@@ -313,7 +324,8 @@ class SystemVerilogCodeGenerator:
                 AIMessage(
                     content=(
                         f"Generated SystemVerilog design and testbench for: "
-                        f"{state['user_request']} (Path: {generated_path})"
+                        f"{state['user_request']} (Path: {generated_path}, "
+                        f"Model: {state['selected_model']})"
                     )
                 )
             )
@@ -512,6 +524,33 @@ class SystemVerilogCodeGenerator:
             state["cleanup_on_retry"] = False
             return state
 
+    def select_model(self) -> str:
+        """Prompts user to select an LLM model from the available options.
+
+        Returns:
+            str: The selected LLM model identifier.
+        """
+        print("\nAvailable LLM Models:")
+        for model_index, model in enumerate(LLM_MODELS, 1):
+            print(f"{model_index}. {model}")
+        while True:
+            choice = input(
+                f"\nSelect a model (1-{len(LLM_MODELS)}): "
+            ).strip()
+            if choice.lower() == "q":
+                return LLM_MODELS[0]
+            try:
+                choice_idx = int(choice) - 1
+                if 0 <= choice_idx < len(LLM_MODELS):
+                    return LLM_MODELS[choice_idx]
+                else:
+                    print(
+                        f"Please select a number between 1 and "
+                        f"{len(LLM_MODELS)}."
+                    )
+            except ValueError:
+                print("Invalid input. Enter a number or 'q' to use default.")
+
     def generate(
         self,
         user_request: str,
@@ -519,6 +558,7 @@ class SystemVerilogCodeGenerator:
         recursion_limit: int = 50,
         max_retries: int = 5,
         max_regenerations: int = 5,
+        model: str = None,
     ) -> Dict[str, Any]:
         """Generates SystemVerilog design, testbench, and .env file.
 
@@ -535,6 +575,9 @@ class SystemVerilogCodeGenerator:
             max_retries: Maximum number of retry attempts (default: 5).
             max_regenerations:
                 Maximum number of regeneration attempts (default: 5).
+            model:
+                The LLM model to use
+                (optional; if None, uses initialized model).
 
         Returns:
             Dict:
@@ -547,6 +590,10 @@ class SystemVerilogCodeGenerator:
             OSError: If output directory creation fails.
             Exception: For errors in code generation or simulation.
         """
+        if model and model in LLM_MODELS:
+            self.llm = init_chat_model(model)
+            self.selected_model = model
+
         initial_state = {
             "user_request": user_request,
             "generated_code": "",
@@ -566,6 +613,7 @@ class SystemVerilogCodeGenerator:
             "max_retries": max_retries,
             "max_regenerations": max_regenerations,
             "cleanup_on_retry": False,
+            "selected_model": self.selected_model,
         }
 
         # Ensure output directory exists
@@ -590,6 +638,7 @@ class SystemVerilogCodeGenerator:
                 "retry_count": 0,
                 "regeneration_count": 0,
                 "cleanup_on_retry": False,
+                "selected_model": self.selected_model,
             }
 
         # Always use the full workflow (save files and run simulation)
@@ -614,11 +663,19 @@ class SystemVerilogCodeGenerator:
             "retry_count": result.get("retry_count", 0),
             "regeneration_count": result.get("regeneration_count", 0),
             "cleanup_on_retry": result.get("cleanup_on_retry", False),
+            "selected_model": result.get(
+                "selected_model", self.selected_model
+            ),
         }
 
     def run_interactive_mode(self):
         """Runs the generator in interactive mode."""
         print("SystemVerilog Code Generator - Interactive Mode")
+        # Select LLM model
+        selected_model = self.select_model()
+        self.llm = init_chat_model(selected_model)
+        self.selected_model = selected_model
+        print(f"Using LLM Model: {selected_model}")
         print("Type 'q' to stop")
         print("=" * 60)
 
@@ -645,6 +702,7 @@ class SystemVerilogCodeGenerator:
                     recursion_limit=200,
                     max_retries=10,
                     max_regenerations=10,
+                    model=selected_model,
                 )
 
                 self._print_result(result)
@@ -657,6 +715,12 @@ class SystemVerilogCodeGenerator:
 
     def run_batch_mode(self, test_requests=None):
         """Runs the generator in batch mode with predefined requests."""
+        # Select LLM model
+        selected_model = self.select_model()
+        self.llm = init_chat_model(selected_model)
+        self.selected_model = selected_model
+        print(f"Using LLM Model: {selected_model}")
+
         if test_requests is None:
             test_requests = [
                 "Create a simple 4-bit counter module, name it "
@@ -680,6 +744,7 @@ class SystemVerilogCodeGenerator:
                 recursion_limit=200,
                 max_retries=10,
                 max_regenerations=10,
+                model=selected_model,
             )
 
             self._print_result(result)
@@ -687,6 +752,7 @@ class SystemVerilogCodeGenerator:
     def _print_result(self, result):
         """Prints the result of a generation request."""
         print(f"Success: {result['success']}")
+        print(f"Selected Model: {result['selected_model']}")
         print(f"Module directory: {result['module_dir'] or 'Not set'}")
         print(f"Cleanup performed: {result['cleanup_performed']}")
         print(
