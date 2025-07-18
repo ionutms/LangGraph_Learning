@@ -671,11 +671,7 @@ class SystemVerilogCodeGenerator:
     def run_interactive_mode(self):
         """Runs the generator in interactive mode."""
         print("SystemVerilog Code Generator - Interactive Mode")
-        # Select LLM model
-        selected_model = self.select_model()
-        self.llm = init_chat_model(selected_model)
-        self.selected_model = selected_model
-        print(f"Using LLM Model: {selected_model}")
+        print(f"Using LLM Model: {self.selected_model}")
         print("Type 'q' to stop")
         print("=" * 60)
 
@@ -702,7 +698,7 @@ class SystemVerilogCodeGenerator:
                     recursion_limit=200,
                     max_retries=10,
                     max_regenerations=10,
-                    model=selected_model,
+                    model=self.selected_model,
                 )
 
                 self._print_result(result)
@@ -715,11 +711,7 @@ class SystemVerilogCodeGenerator:
 
     def run_batch_mode(self, test_requests=None):
         """Runs the generator in batch mode with predefined requests."""
-        # Select LLM model
-        selected_model = self.select_model()
-        self.llm = init_chat_model(selected_model)
-        self.selected_model = selected_model
-        print(f"Using LLM Model: {selected_model}")
+        print(f"Using LLM Model: {self.selected_model}")
 
         if test_requests is None:
             test_requests = [
@@ -744,7 +736,7 @@ class SystemVerilogCodeGenerator:
                 recursion_limit=200,
                 max_retries=10,
                 max_regenerations=10,
-                model=selected_model,
+                model=self.selected_model,
             )
 
             self._print_result(result)
@@ -788,6 +780,11 @@ if __name__ == "__main__":
     print("SystemVerilog Code Generator Graph:")
     print(generator.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60)
+
+    selected_model = generator.select_model()
+    generator.llm = init_chat_model(selected_model)
+    generator.selected_model = selected_model
+    print(f"\nSelected LLM Model: {selected_model}")
 
     print("\nChoose mode: \n1. Interactive \n2. Batch \n3. Custom batch")
     mode = input("\nEnter choice (1-3): ")
