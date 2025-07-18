@@ -669,44 +669,76 @@ class SystemVerilogCodeGenerator:
             "regeneration_count": result.get("regeneration_count", 0),
         }
 
-
-if __name__ == "__main__":
-    generator = SystemVerilogCodeGenerator()
-
-    print("SystemVerilog Code Generator Graph:")
-    print(generator.graph.get_graph().draw_ascii())
-    print("\n" + "=" * 60)
-
-    user_input = input(
-        "Run demo test requests or provide you prompt? (y/n)\n"
-    )
-
-    # Example requests
-    test_requests = [
-        "Create a simple 4-bit counter module, "
-        + "name it 'four_bit_counter' this is for chapter 1, example 1",
-        "Generate a 2-to-1 multiplexer with enable signal, "
-        + "name it 'mux_2to1', chapter 2, example 2",
-        "Create a D flip-flop with asynchronous reset, "
-        + "name the module 'dff', chapter 3, example 3",
-    ]
-
-    if user_input == "n":
-        user_request = input("Enter your request:\n")
-        test_requests = [user_request]
-
-    for request in test_requests:
-        print(f"\nRequest: {request}")
+    def run_interactive_mode(self):
+        """Runs the generator in interactive mode."""
+        print("SystemVerilog Code Generator - Interactive Mode")
+        print("Type 'q' to stop")
         print("=" * 60)
 
-        result = generator.generate(
-            request,
-            output_dir=".",
-            recursion_limit=200,
-            max_retries=10,
-            max_regenerations=10,
-        )
+        while True:
+            try:
+                user_request = input(
+                    "\nEnter your SystemVerilog request (type 'q' to exit):\n"
+                )
 
+                if user_request.lower() == "q":
+                    print("Goodbye!")
+                    break
+
+                if not user_request.strip():
+                    print("Please enter a valid request.")
+                    continue
+
+                print(f"\nProcessing: {user_request}")
+                print("=" * 60)
+
+                result = self.generate(
+                    user_request,
+                    output_dir=".",
+                    recursion_limit=200,
+                    max_retries=10,
+                    max_regenerations=10,
+                )
+
+                self._print_result(result)
+
+            except KeyboardInterrupt:
+                print("\nInterrupted by user. Goodbye!")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+
+    def run_batch_mode(self, test_requests=None):
+        """Runs the generator in batch mode with predefined requests."""
+        if test_requests is None:
+            test_requests = [
+                "Create a simple 4-bit counter module, name it "
+                "'four_bit_counter' this is for chapter 1, example 1",
+                "Generate a 2-to-1 multiplexer with enable signal, name it "
+                "'mux_2to1', chapter 2, example 2",
+                "Create a D flip-flop with asynchronous reset, name the "
+                "module 'dff', chapter 3, example 3",
+            ]
+
+        print("SystemVerilog Code Generator - Batch Mode")
+        print("=" * 60)
+
+        for i, request in enumerate(test_requests, 1):
+            print(f"\n[{i}/{len(test_requests)}] Request: {request}")
+            print("=" * 60)
+
+            result = self.generate(
+                request,
+                output_dir=".",
+                recursion_limit=200,
+                max_retries=10,
+                max_regenerations=10,
+            )
+
+            self._print_result(result)
+
+    def _print_result(self, result):
+        """Prints the result of a generation request."""
         print(f"Success: {result['success']}")
         print(f"Module directory: {result['module_dir'] or 'Not set'}")
         print(f"Cleanup performed: {result['cleanup_performed']}")
@@ -729,9 +761,40 @@ if __name__ == "__main__":
             print(f"❌ Generation failed: {result['error']}")
             if result["cleanup_performed"]:
                 print("🧹 Files were cleaned up after failure")
-
             print(
                 "Files have been cleaned up, ready for fresh retry if needed"
             )
 
         print("\n" + "=" * 60)
+
+
+if __name__ == "__main__":
+    generator = SystemVerilogCodeGenerator()
+
+    print("SystemVerilog Code Generator Graph:")
+    print(generator.graph.get_graph().draw_ascii())
+    print("\n" + "=" * 60)
+
+    print("\nChoose mode: \n1. Interactive \n2. Batch \n3. Custom batch")
+    mode = input("\nEnter choice (1-3): ")
+
+    if mode.lower() == "1":
+        generator.run_interactive_mode()
+    elif mode.lower() == "2":
+        generator.run_batch_mode()
+    elif mode.lower() == "3":
+        # Custom batch mode
+        requests = []
+        print("Enter requests (empty line to finish):")
+        while True:
+            request = input("Request: ")
+            if not request.strip():
+                break
+            requests.append(request)
+
+        if requests:
+            generator.run_batch_mode(requests)
+        else:
+            print("No requests provided.")
+    else:
+        print("Invalid mode selected.")
