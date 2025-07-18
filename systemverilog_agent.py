@@ -126,7 +126,7 @@ class AgentState(TypedDict):
         saved_files: Dictionary tracking saved file paths.
         user_retry_confirmed: Whether user confirmed retry via prompt.
         cleanup_performed: Whether cleanup was performed on failure.
-        user_regenerate_confirmed:
+        regenerate_confirmed:
             Whether user confirmed regeneration after success.
         retry_count: Number of retry attempts made.
         regeneration_count: Number of regeneration attempts made.
@@ -148,7 +148,7 @@ class AgentState(TypedDict):
     saved_files: Dict[str, str]
     user_retry_confirmed: bool
     cleanup_performed: bool
-    user_regenerate_confirmed: bool
+    regenerate_confirmed: bool
     retry_count: int
     regeneration_count: int
     max_retries: int
@@ -208,7 +208,7 @@ class SystemVerilogCodeGenerator:
             if state.get("cleanup_on_retry", False):
                 return "cleanup_files"
             if state.get("user_retry_confirmed", False) or state.get(
-                "user_regenerate_confirmed", False
+                "regenerate_confirmed", False
             ):
                 return "generate_code"
             return "user_exit"
@@ -365,7 +365,7 @@ class SystemVerilogCodeGenerator:
                         )
                     )
                     state["user_retry_confirmed"] = False
-                    state["user_regenerate_confirmed"] = False
+                    state["regenerate_confirmed"] = False
                     return state
 
                 cleanup_status = (
@@ -403,7 +403,7 @@ class SystemVerilogCodeGenerator:
                         )
                     )
                     state["user_retry_confirmed"] = True
-                    state["user_regenerate_confirmed"] = False
+                    state["regenerate_confirmed"] = False
                     state["cleanup_on_retry"] = False
                     # Reset code-related fields
                     state["generated_code"] = ""
@@ -424,7 +424,7 @@ class SystemVerilogCodeGenerator:
                         )
                     )
                     state["user_retry_confirmed"] = True
-                    state["user_regenerate_confirmed"] = False
+                    state["regenerate_confirmed"] = False
                     state["cleanup_on_retry"] = True
                     # Reset code-related fields
                     state["generated_code"] = ""
@@ -440,7 +440,7 @@ class SystemVerilogCodeGenerator:
                         AIMessage(content="User chose to quit retry process.")
                     )
                     state["user_retry_confirmed"] = False
-                    state["user_regenerate_confirmed"] = False
+                    state["regenerate_confirmed"] = False
                     state["cleanup_on_retry"] = False
                     return state
             else:
@@ -458,7 +458,7 @@ class SystemVerilogCodeGenerator:
                             )
                         )
                     )
-                    state["user_regenerate_confirmed"] = False
+                    state["regenerate_confirmed"] = False
                     state["user_retry_confirmed"] = False
                     return state
 
@@ -490,7 +490,7 @@ class SystemVerilogCodeGenerator:
                             )
                         )
                     )
-                    state["user_regenerate_confirmed"] = True
+                    state["regenerate_confirmed"] = True
                     state["user_retry_confirmed"] = False
                     state["cleanup_on_retry"] = False
                     # Reset only code-related fields, keep directory structure
@@ -506,7 +506,7 @@ class SystemVerilogCodeGenerator:
                             content="User chose to quit regeneration process."
                         )
                     )
-                    state["user_regenerate_confirmed"] = False
+                    state["regenerate_confirmed"] = False
                     state["user_retry_confirmed"] = False
                     state["cleanup_on_retry"] = False
                     return state
@@ -520,7 +520,7 @@ class SystemVerilogCodeGenerator:
                 )
             )
             state["user_retry_confirmed"] = False
-            state["user_regenerate_confirmed"] = False
+            state["regenerate_confirmed"] = False
             state["cleanup_on_retry"] = False
             return state
 
@@ -583,7 +583,7 @@ class SystemVerilogCodeGenerator:
             Dict:
                 Contains success, design_code, testbench_code, env_content,
                 generated_path, error, messages, saved_files, module_dir,
-                cleanup_performed, user_regenerate_confirmed,
+                cleanup_performed, regenerate_confirmed,
                 cleanup_on_retry.
 
         Raises:
@@ -607,7 +607,7 @@ class SystemVerilogCodeGenerator:
             "saved_files": {},
             "user_retry_confirmed": False,
             "cleanup_performed": False,
-            "user_regenerate_confirmed": False,
+            "regenerate_confirmed": False,
             "retry_count": 0,
             "regeneration_count": 0,
             "max_retries": max_retries,
@@ -634,7 +634,7 @@ class SystemVerilogCodeGenerator:
                 "saved_files": {},
                 "module_dir": "",
                 "cleanup_performed": False,
-                "user_regenerate_confirmed": False,
+                "regenerate_confirmed": False,
                 "retry_count": 0,
                 "regeneration_count": 0,
                 "cleanup_on_retry": False,
@@ -657,9 +657,7 @@ class SystemVerilogCodeGenerator:
             "saved_files": result.get("saved_files", {}),
             "module_dir": result.get("module_dir", ""),
             "cleanup_performed": result.get("cleanup_performed", False),
-            "user_regenerate_confirmed": result.get(
-                "user_regenerate_confirmed", False
-            ),
+            "regenerate_confirmed": result.get("regenerate_confirmed", False),
             "retry_count": result.get("retry_count", 0),
             "regeneration_count": result.get("regeneration_count", 0),
             "cleanup_on_retry": result.get("cleanup_on_retry", False),
@@ -747,9 +745,7 @@ class SystemVerilogCodeGenerator:
         print(f"Selected Model: {result['selected_model']}")
         print(f"Module directory: {result['module_dir'] or 'Not set'}")
         print(f"Cleanup performed: {result['cleanup_performed']}")
-        print(
-            f"Regeneration confirmed: {result['user_regenerate_confirmed']}"
-        )
+        print(f"Regeneration confirmed: {result['regenerate_confirmed']}")
         print(f"Retry count: {result['retry_count']}")
         print(f"Regeneration count: {result['regeneration_count']}")
         print(f"Cleanup on retry: {result['cleanup_on_retry']}")
@@ -767,9 +763,7 @@ class SystemVerilogCodeGenerator:
             print(f"❌ Generation failed: {result['error']}")
             if result["cleanup_performed"]:
                 print("🧹 Files were cleaned up after failure")
-            print(
-                "Files have been cleaned up, ready for fresh retry if needed"
-            )
+            print("Files have been cleaned up")
 
         print("\n" + "=" * 60)
 
