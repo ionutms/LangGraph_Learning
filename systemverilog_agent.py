@@ -31,6 +31,8 @@ from systemverilog_agent_handlers import SVHandlers
 load_dotenv()
 
 LLM_MODEL = "groq:llama-3.3-70b-versatile"
+# LLM_MODEL = "groq:deepseek-r1-distill-llama-70b"
+# LLM_MODEL = "groq:qwen/qwen3-32b"
 
 LLM_INSTRUCTIONS = """
 You are an expert SystemVerilog code generator.
@@ -45,8 +47,6 @@ Adapt the code for Verilator.
     - design_name is the module name or descriptive name
   - Examples:
     - "Chapter_1_examples/example_1_four_bit_counter"
-    - "Chapter_2_examples/example_3_mux_2to1_with_enable"
-    - "Chapter_3_examples/example_5_dff_async_reset"
   - If no specific chapter is mentioned, use Chapter_1_examples
   - Make the path descriptive and logical based on the design complexity
 
