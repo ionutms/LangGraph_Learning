@@ -26,12 +26,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-from systemverilog_agent_tools import (
-    cleanup_files_tool,
-    generate_env_file_tool,
-    run_simulation_tool,
-    save_code_tool,
-)
+from systemverilog_agent_handlers import SVHandlers
 
 load_dotenv()
 
@@ -167,13 +162,7 @@ class SystemVerilogCodeGenerator:
         Sets up the language model, prompt, and workflow for generating
         SystemVerilog code and testbenches per standards.
         """
-        self.tools = [
-            cleanup_files_tool,
-            generate_env_file_tool,
-            run_simulation_tool,
-            save_code_tool,
-        ]
-        self.llm = init_chat_model(LLM_MODEL).bind_tools(self.tools)
+        self.llm = init_chat_model(LLM_MODEL)
         self.sv_prompt = ChatPromptTemplate.from_messages([
             ("system", LLM_INSTRUCTIONS),
             ("human", "{user_request}"),
@@ -186,10 +175,10 @@ class SystemVerilogCodeGenerator:
 
         # Add nodes
         workflow.add_node("generate_code", self.generate_systemverilog)
-        workflow.add_node("generate_env", self.create_env_file)
-        workflow.add_node("save_code", self.save_generated_files)
-        workflow.add_node("run_simulation", self.execute_simulation)
-        workflow.add_node("cleanup_files", self.cleanup_on_failure)
+        workflow.add_node("generate_env", SVHandlers.create_env_file)
+        workflow.add_node("save_code", SVHandlers.save_generated_files)
+        workflow.add_node("run_simulation", SVHandlers.execute_simulation)
+        workflow.add_node("cleanup_files", SVHandlers.cleanup_on_failure)
         workflow.add_node("retry_on_failure", self.retry_on_failure)
         workflow.add_node("regenerate_on_success", self.regenerate_on_success)
 
@@ -371,178 +360,6 @@ class SystemVerilogCodeGenerator:
             )
         except Exception as error:
             state["error"] = f"Code generation error: {str(error)}"
-        return state
-
-    def create_env_file(self, state: AgentState) -> AgentState:
-        """Generates .env file content using generate_env_file_tool.
-
-        Uses the LLM-generated path to create .env with project config.
-
-        Args:
-            state: Agent state with generated code and path.
-
-        Returns:
-            AgentState: Updated with .env content and status messages.
-
-        Raises:
-            Exception: If .env file generation fails.
-        """
-        try:
-            # Use forward slashes for the path
-            full_output_path = state["generated_path"]
-
-            result = generate_env_file_tool.invoke({
-                "generated_code": state["generated_code"],
-                "output_dir": full_output_path,
-            })
-            state["env_content"] = result["env_content"]
-            if result["error"]:
-                state["error"] = result["error"]
-            else:
-                module_name = (
-                    re.search(
-                        r"module\s+(\w+)", state["generated_code"]
-                    ).group(1)
-                    if re.search(r"module\s+(\w+)", state["generated_code"])
-                    else "generated_module"
-                )
-                state["messages"].append(
-                    AIMessage(
-                        content=(
-                            f"Generated .env file for {module_name} in ",
-                            "{state['generated_path']}",
-                        )
-                    )
-                )
-        except Exception as error:
-            state["error"] = f"Error generating .env file: {str(error)}"
-        return state
-
-    def save_generated_files(self, state: AgentState) -> AgentState:
-        """Saves generated code and .env using save_code_tool.
-
-        Stores design, testbench, and .env files in the LLM-generated path.
-        If module_dir already exists (from regeneration), uses the same
-        directory.
-
-        Args:
-            state: Agent state with code, testbench, and .env content.
-
-        Returns:
-            AgentState: Updated with save status messages and file paths.
-
-        Raises:
-            Exception: If file saving fails due to I/O or other errors.
-        """
-        try:
-            # Use forward slashes for the path
-            full_output_path = state["generated_path"]
-
-            # Pass existing module_dir if available (for regeneration)
-            save_params = {
-                "design_code": state["generated_code"],
-                "testbench_code": state["testbench_code"],
-                "env_content": state["env_content"],
-                "output_dir": full_output_path,
-            }
-
-            # If we have an existing module_dir, use it for regeneration
-            if state.get("module_dir"):
-                save_params["existing_module_dir"] = state["module_dir"]
-
-            result = save_code_tool.invoke(save_params)
-
-            for message in result["messages"]:
-                state["messages"].append(AIMessage(content=message))
-            if result["error"]:
-                state["error"] = result["error"]
-            else:
-                # Store the module directory and saved files for later use
-                state["module_dir"] = result.get("module_dir", "")
-                state["saved_files"] = result.get("saved_files", {})
-        except Exception as error:
-            state["error"] = f"Error saving files: {str(error)}"
-        return state
-
-    def execute_simulation(self, state: AgentState) -> AgentState:
-        """Executes Verilator simulation using run_simulation_tool.
-
-        Runs simulation for saved SystemVerilog files in module directory.
-
-        Args:
-            state: Agent state with module directory and other data.
-
-        Returns:
-            AgentState: Updated with simulation results and messages.
-
-        Raises:
-            Exception: If simulation execution fails.
-        """
-        try:
-            if not state["module_dir"]:
-                state["error"] = "Module directory not set for simulation"
-                state["messages"].append(
-                    AIMessage(content="Error: Module directory not set")
-                )
-                return state
-            result = run_simulation_tool.invoke({
-                "target_dir": state["module_dir"],
-                "strip_lines": True,
-            })
-            state["messages"].append(AIMessage(content=result["message"]))
-            if result["error"]:
-                state["error"] = result["error"]
-        except Exception as error:
-            state["error"] = f"Error executing simulation: {str(error)}"
-        return state
-
-    def cleanup_on_failure(self, state: AgentState) -> AgentState:
-        """Cleans up generated files when simulation fails.
-
-        Removes all generated files and the module directory to maintain
-        a clean workspace before offering retry option.
-
-        Args:
-            state: Agent state with module directory and saved files info.
-
-        Returns:
-            AgentState: Updated with cleanup status and messages.
-        """
-        try:
-            if not state["module_dir"]:
-                state["messages"].append(
-                    AIMessage(content="No module directory to clean up")
-                )
-                state["cleanup_performed"] = False
-                return state
-
-            result = cleanup_files_tool.invoke({
-                "module_dir": state["module_dir"],
-                "saved_files": state["saved_files"],
-            })
-
-            if result["success"]:
-                state["messages"].append(
-                    AIMessage(content=f"🧹 Cleanup: {result['message']}")
-                )
-                state["cleanup_performed"] = True
-                # Clear the module_dir and saved_files since they're gone
-                state["module_dir"] = ""
-                state["saved_files"] = {}
-            else:
-                state["messages"].append(
-                    AIMessage(content=f"❌ Cleanup failed: {result['error']}")
-                )
-                state["cleanup_performed"] = False
-                # Don't clear module_dir if cleanup failed
-
-        except Exception as error:
-            state["error"] = f"Error during cleanup: {str(error)}"
-            state["messages"].append(
-                AIMessage(content=f"❌ Cleanup error: {str(error)}")
-            )
-            state["cleanup_performed"] = False
-
         return state
 
     def retry_on_failure(self, state: AgentState) -> AgentState:
