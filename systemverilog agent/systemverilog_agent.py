@@ -21,9 +21,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from typing_extensions import TypedDict
-
 from systemverilog_agent_handlers import SVHandlers
+from typing_extensions import TypedDict
 
 load_dotenv()
 
@@ -200,28 +199,29 @@ class SystemVerilogCodeGenerator:
         def route_handle_result(state: AgentState) -> str:
             """Routes based on user decisions."""
             if state.get("retry_count", 0) >= state.get("max_retries", 5):
-                return "retry_limit_reached"
+                return "max_retries_exceeded"
             if state.get("regeneration_count", 0) >= state.get(
                 "max_regenerations", 5
             ):
-                return "regeneration_limit_reached"
+                return "max_regenerations_exceeded"
             if state.get("cleanup_on_retry", False):
-                return "cleanup_files"
-            if state.get("user_retry_confirmed", False) or state.get(
-                "regenerate_confirmed", False
-            ):
-                return "generate_code"
-            return "user_exit"
+                return "cleanup_and_retry"
+            if state.get("user_retry_confirmed", False):
+                return "user_wants_retry"
+            if state.get("regenerate_confirmed", False):
+                return "user_wants_regeneration"
+            return "user_wants_exit"
 
         workflow.add_conditional_edges(
             "simulation_result",
             route_handle_result,
             {
-                "cleanup_files": "cleanup_files",
-                "generate_code": "generate_code",
-                "user_exit": END,
-                "retry_limit_reached": END,
-                "regeneration_limit_reached": END,
+                "cleanup_and_retry": "cleanup_files",
+                "user_wants_retry": "generate_code",
+                "user_wants_regeneration": "generate_code",
+                "user_wants_exit": END,
+                "max_retries_exceeded": END,
+                "max_regenerations_exceeded": END,
             },
         )
 
