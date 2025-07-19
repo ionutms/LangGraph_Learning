@@ -1,3 +1,5 @@
+"""Module for conversational AI using LangChain."""
+
 from typing import List, TypedDict, Union
 
 from dotenv import load_dotenv
@@ -9,6 +11,12 @@ load_dotenv()
 
 
 class AgentState(TypedDict):
+    """Represents the state of a conversational agent.
+
+    Attributes:
+        messages: List of messages exchanged between human and AI.
+    """
+
     messages: List[Union[HumanMessage, AIMessage]]
 
 
@@ -16,7 +24,14 @@ llm = init_chat_model("groq:llama3-70b-8192")
 
 
 def process(state: AgentState) -> AgentState:
-    """This node will solve the request from input"""
+    """Processes the current state of the conversational agent.
+
+    Args:
+        state: Current state of the agent.
+
+    Returns:
+        Updated state with AI response.
+    """
     response = llm.invoke(state["messages"])
     state["messages"].append(AIMessage(content=response.content))
     print(f"AI: {response.content}")
