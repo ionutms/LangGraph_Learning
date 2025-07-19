@@ -20,12 +20,28 @@ document_content = ""
 
 
 class AgentState(TypedDict):
+    """
+    A dictionary representing the state of the agent.
+
+    Attributes:
+        messages (Annotated[Sequence[BaseMessage], add_messages]):
+            A sequence of messages.
+    """
+
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
 
 @tool
 def update(content: str) -> str:
-    """Updates the document with the provided content."""
+    """
+    Updates the document with the provided content.
+
+    Args:
+        content (str): The new content for the document.
+
+    Returns:
+        str: A success message with the updated document content.
+    """
     global document_content
     document_content = content
     return (
@@ -36,10 +52,14 @@ def update(content: str) -> str:
 
 @tool
 def save(filename: str) -> str:
-    """Save the current document to a text file and finish the process.
+    """
+    Save the current document to a text file and finish the process.
 
     Args:
-        filename: Name for the text file.
+        filename (str): Name for the text file.
+
+    Returns:
+        str: A success message with the filename or an error message.
     """
 
     global document_content
@@ -63,6 +83,15 @@ model = init_chat_model("groq:llama3-70b-8192").bind_tools(tools)
 
 
 def our_agent(state: AgentState) -> AgentState:
+    """
+    The main agent function that handles user input and responds accordingly.
+
+    Args:
+        state (AgentState): The current state of the agent.
+
+    Returns:
+        AgentState: The updated state of the agent.
+    """
     system_prompt = SystemMessage(
         content=f"""
     You are Drafter, a helpful writing assistant.
@@ -101,7 +130,15 @@ def our_agent(state: AgentState) -> AgentState:
 
 
 def should_continue(state: AgentState) -> str:
-    """Determine if we should continue or end the conversation."""
+    """
+    Determine if we should continue or end the conversation.
+
+    Args:
+        state (AgentState): The current state of the agent.
+
+    Returns:
+        str: 'continue' or 'end' based on the conversation state.
+    """
 
     messages = state["messages"]
 
@@ -122,7 +159,12 @@ def should_continue(state: AgentState) -> str:
 
 
 def print_messages(messages):
-    """Function I made to print the messages in a more readable format"""
+    """
+    Print the messages in a more readable format.
+
+    Args:
+        messages: A sequence of messages.
+    """
     if not messages:
         return
 
@@ -154,6 +196,11 @@ app = graph.compile()
 
 
 def run_document_agent():
+    """
+    Run the document agent.
+
+    This function initializes the agent and starts the conversation.
+    """
     print("\n ===== DRAFTER =====")
 
     state = {"messages": []}
