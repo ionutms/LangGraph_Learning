@@ -50,7 +50,7 @@ Focus on:
 }
 
 
-class DocstringState(TypedDict):
+class AgentState(TypedDict):
     """State for docstring and comment processing graph.
 
     Attributes:
@@ -337,7 +337,7 @@ class LLMPromptGenerator:
     """Generates prompts for LLM-based docstring operations."""
 
     @staticmethod
-    def update_prompt(state: DocstringState) -> str:
+    def update_prompt(state: AgentState) -> str:
         """Create prompt for updating existing docstrings.
 
         Args:
@@ -541,7 +541,7 @@ class GraphNodeHandler:
         self.prompt_generator = LLMPromptGenerator()
         self.file_manager = FileManager()
 
-    def load_file(self, state: DocstringState) -> dict:
+    def load_file(self, state: AgentState) -> dict:
         """Load and validate the Python file.
 
         Args:
@@ -561,7 +561,7 @@ class GraphNodeHandler:
             "processed_code": original_code,
         }
 
-    def analyze_docstrings(self, state: DocstringState) -> dict:
+    def analyze_docstrings(self, state: AgentState) -> dict:
         """Analyze and extract docstring info from the code.
 
         Args:
@@ -581,7 +581,7 @@ class GraphNodeHandler:
         except Exception as e:
             return {"error": f"Error analyzing docstrings: {e}"}
 
-    def process_docstrings(self, state: DocstringState) -> dict:
+    def process_docstrings(self, state: AgentState) -> dict:
         """Process docstrings and comments based on the action.
 
         Args:
@@ -622,7 +622,7 @@ class GraphNodeHandler:
         except Exception as e:
             return {"error": f"Error processing docstrings: {e}"}
 
-    def llm_process(self, state: DocstringState) -> dict:
+    def llm_process(self, state: AgentState) -> dict:
         """Use LLM to update docstrings.
 
         Args:
@@ -663,7 +663,7 @@ class GraphNodeHandler:
         except Exception as e:
             return {"error": f"Error in LLM processing: {e}"}
 
-    def save_result(self, state: DocstringState) -> dict:
+    def save_result(self, state: AgentState) -> dict:
         """Save the processed code to the output directory.
 
         Args:
@@ -688,7 +688,7 @@ class GraphNodeHandler:
         return {}
 
     @staticmethod
-    def should_use_llm(state: DocstringState) -> str:
+    def should_use_llm(state: AgentState) -> str:
         """Determine if LLM processing is needed.
 
         Args:
@@ -719,7 +719,7 @@ class DocstringForge:
             StateGraph: Compiled graph for processing docstrings
                         and comments.
         """
-        graph_builder = StateGraph(DocstringState)
+        graph_builder = StateGraph(AgentState)
         graph_builder.add_node("load", self.handler.load_file)
         graph_builder.add_node("analyze", self.handler.analyze_docstrings)
         graph_builder.add_node("process", self.handler.process_docstrings)
