@@ -11,7 +11,11 @@ from typing_extensions import TypedDict
 
 load_dotenv()
 
-llm = init_chat_model("groq:llama-3.3-70b-versatile")
+llm = init_chat_model(
+    "groq:llama-3.3-70b-versatile",
+    temperature=0.3,
+    max_tokens=2048,
+)
 
 # Global LLM instructions for docstring operations
 LLM_INSTRUCTIONS = {
@@ -20,7 +24,8 @@ Improve the docstrings in the following Python code.
 Make them more comprehensive, clear, and follow Google docstring
 conventions without the example section.
 Keep makimum 79 chars per line.
-Remove whitespaces from generated docstrings.
+Remove whitespaces from generated docstrings at lines end.
+Add docstrings to all functions and classes that do not have them.
 Don't make other changes to the provided code.
 
 Current docstrings found:
@@ -39,26 +44,6 @@ Focus on:
 4. Example usage where appropriate
 5. Consistent formatting
 """,
-    "generate": """
-Add docstrings to all functions and classes that are missing them.
-Follow Google docstring conventions without the example section.
-Keep makimum 79 chars per line.
-Remove whitespaces from generated docstrings.
-Don't make other changes to the provided code.
-Focus just on docstrings, not code logic.
-
-Code:
-```python
-{original_code}
-```
-
-Please return the complete Python code with added docstrings.
-For each function/class:
-1. Add a clear description
-2. Document all parameters with types
-3. Document return values
-4. Use consistent formatting
-""",
 }
 
 
@@ -70,7 +55,7 @@ class DocstringState(TypedDict):
         file_path (str): Path to the Python file to process
         original_code (str): Original Python code content
         processed_code (str): Code after docstring processing
-        action (str): Action to perform - 'remove', 'update', or 'generate'
+        action (str): Action to perform - 'remove' or 'update'
         docstring_info (List[dict]): Information about found docstrings
         messages (list): Chat messages for LLM interaction
         error (Optional[str]): Error message if processing fails
@@ -80,7 +65,7 @@ class DocstringState(TypedDict):
     file_path: str
     original_code: str
     processed_code: str
-    action: Literal["remove", "update", "generate"]
+    action: Literal["remove", "update"]
     docstring_info: List[dict]
     messages: Annotated[list, add_messages]
     error: Optional[str]
@@ -326,13 +311,6 @@ class LLMPromptGenerator:
             original_code=state["original_code"],
         )
 
-    @staticmethod
-    def generate_prompt(state: DocstringState) -> str:
-        """Create prompt for generating missing docstrings."""
-        return LLM_INSTRUCTIONS["generate"].format(
-            original_code=state["original_code"]
-        )
-
 
 class FileManager:
     """Manages file operations and discovery."""
@@ -464,46 +442,22 @@ class UserInterface:
     @staticmethod
     def get_output_directory() -> str:
         """Get the output directory from user or use default."""
-        print("\n📂 Output directory options:")
-        print("  1. Use default: 'processed_files'")
-        print("  2. Specify custom directory")
-
-        while True:
-            try:
-                choice = input("Select option (1/2): ").strip()
-
-                if choice == "1":
-                    return "processed_files"
-                elif choice == "2":
-                    custom_dir = input(
-                        "Enter output directory name: "
-                    ).strip()
-                    if custom_dir:
-                        return custom_dir
-                    else:
-                        print("❌ Directory name cannot be empty.")
-                else:
-                    print("❌ Please choose 1 or 2.")
-
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                sys.exit(0)
+        return "processed_files"
 
     @staticmethod
     def get_user_choice(files: List[Path]) -> tuple[str, Path, str]:
         """Get user's choice of action, file, and output directory."""
-        actions = {"r": "remove", "u": "update", "g": "generate"}
+        actions = {"r": "remove", "u": "update"}
 
         print("\n🔧 Actions available:")
         print("  r - Remove all docstrings")
         print("  u - Update existing docstrings with LLM")
-        print("  g - Generate missing docstrings with LLM")
         print("  q - Quit")
 
         while True:
             try:
                 action_input = (
-                    input("\nSelect action (r/u/g/q): ").lower().strip()
+                    input("\nSelect action (r/u/q): ").lower().strip()
                 )
 
                 if action_input == "q":
@@ -511,7 +465,7 @@ class UserInterface:
                     sys.exit(0)
 
                 if action_input not in actions:
-                    print("❌ Invalid action. Please choose r, u, g, or q.")
+                    print("❌ Invalid action. Please choose r, u, or q.")
                     continue
 
                 file_input = input(
@@ -600,18 +554,6 @@ class GraphNodeHandler:
                     ]
                 }
 
-            elif action == "generate":
-                return {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": self.prompt_generator.generate_prompt(
-                                state
-                            ),
-                        }
-                    ]
-                }
-
             else:
                 return {"error": f"Unknown action: {action}"}
 
@@ -619,7 +561,7 @@ class GraphNodeHandler:
             return {"error": f"Error processing docstrings: {e}"}
 
     def llm_process(self, state: DocstringState) -> dict:
-        """Use LLM to update or generate docstrings."""
+        """Use LLM to update docstrings."""
         if state.get("error") or not state.get("messages"):
             return {}
 
@@ -677,7 +619,7 @@ class GraphNodeHandler:
         """Determine if LLM processing is needed."""
         if state.get("error"):
             return "save"
-        return "llm" if state["action"] in ["update", "generate"] else "save"
+        return "llm" if state["action"] == "update" else "save"
 
 
 class DocstringForge:
