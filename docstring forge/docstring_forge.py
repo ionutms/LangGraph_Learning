@@ -15,8 +15,8 @@ load_dotenv()
 
 llm = init_chat_model(
     "groq:llama-3.3-70b-versatile",
-    temperature=0.3,
-    max_tokens=2048,
+    temperature=0.0,
+    max_tokens=12000,
 )
 
 # Global LLM instructions for docstring operations
@@ -434,14 +434,11 @@ class FileManager:
             Optional[str]: Error message if saving fails, None on success.
         """
         try:
+            output_dir = Path(output_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                relative_path = file_path.relative_to(Path.cwd())
-            except ValueError:
-                relative_path = file_path.name
 
-            output_path = output_dir / relative_path
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            # Use only the filename from the original path
+            output_path = output_dir / file_path.name
 
             if not content.endswith("\n"):
                 content += "\n"
@@ -451,7 +448,7 @@ class FileManager:
 
             print(f"✅ Saved: {output_path}")
             print(f"📁 Original: {file_path}")
-            print(f"📂 Output dir: {output_dir}")
+            print(f"📂 Output: {output_dir}")
 
         except Exception as e:
             return f"Error saving file: {e}"
@@ -473,7 +470,7 @@ class UserInterface:
             try:
                 print(f"{i:2d}. {file_path.relative_to(Path.cwd())}")
             except OSError:
-                print(f"{i:2d}. {file_path.relative_to(Path.cwd())}")
+                print(f"{i:2d}. {file_path}")
         print("-" * 50)
 
     @staticmethod
@@ -750,9 +747,10 @@ class DocstringForge:
             file_path: Path to the Python file to process.
             output_dir: Directory to save the processed file.
         """
-        print(f"\n🔧 Processing: {file_path.relative_to(Path.cwd())}")
+        rel_path = file_path.relative_to(Path.cwd())
+        print(f"🔧 Processing: {rel_path}")
         print(f"📝 Action: {action}")
-        print(f"📂 Output dir: {output_dir}")
+        print(f"📂 Output: {output_dir}")
         print("-" * 50)
 
         initial_state = {
@@ -777,44 +775,63 @@ class DocstringForge:
                 print(f"🗑️ Removed {len(result['docstring_info'])} docstrings")
             else:
                 print(
-                    f"📚 Processed {len(result['docstring_info'])} docstrings"
+                    f"📚 Updated {len(result['docstring_info'])} docstrings"
                 )
 
             print("✨ Done!")
 
         except Exception as e:
-            print(f"❌ Unexpected error: {e}")
+            print(f"❌ Error: {e}")
 
     def interactive_mode(self):
         """Run the docstring forge in interactive mode."""
         current_dir = Path.cwd()
         print("🔥 Docstring Forge - Interactive")
-        print(f"📂 Scanning dir: {current_dir}")
+        print(f"📂 Scanning: {current_dir}")
         print("=" * 60)
 
-        python_files = self.file_manager.find_python_files(current_dir)
-
-        if not python_files:
-            print("❌ No Python files found.")
-            return
-
-        print(f"✅ Found {len(python_files)} Python files")
-
         while True:
+            python_files = self.file_manager.find_python_files(current_dir)
+
+            if not python_files:
+                print("❌ No Python files found.")
+                return
+
+            print(f"✅ Found {len(python_files)} Python files")
+
             try:
                 self.ui.display_files_menu(python_files)
                 action, selected_file, output_dir = self.ui.get_user_choice(
                     python_files
                 )
-                self.process_file(action, selected_file, output_dir)
+
+                max_repeats = 5
+                repeat_count = 0
+
+                while repeat_count < max_repeats:
+                    self.process_file(action, selected_file, output_dir)
+                    repeat_count += 1
+
+                    if repeat_count < max_repeats:
+                        print(f"🔄 Repeated {repeat_count} of {max_repeats}")
+                        choice = (
+                            input(
+                                f"🔄 Repeat on {selected_file.name}? (y/n): "
+                            )
+                            .lower()
+                            .strip()
+                        )
+                        if choice not in ["y", "yes"]:
+                            break
+                    else:
+                        print(f"🔄 Max repeats ({max_repeats}) reached")
 
                 while True:
-                    continue_choice = (
-                        input("\n🔄 Process another? (y/n): ").lower().strip()
-                    )
-                    if continue_choice in ["y", "yes"]:
+                    choice = input("\n🔄 Process another file? (y/n): ")
+                    choice = choice.lower().strip()
+                    if choice in ["y", "yes"]:
                         break
-                    elif continue_choice in ["n", "no"]:
+                    elif choice in ["n", "no"]:
                         print("👋 Goodbye!")
                         return
                     else:
