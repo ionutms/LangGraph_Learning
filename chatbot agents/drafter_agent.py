@@ -1,15 +1,16 @@
 from typing import Annotated, Sequence, TypedDict
+
 from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
-    ToolMessage,
     SystemMessage,
+    ToolMessage,
 )
-from langchain.chat_models import init_chat_model
 from langchain_core.tools import tool
+from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 load_dotenv()
@@ -27,7 +28,10 @@ def update(content: str) -> str:
     """Updates the document with the provided content."""
     global document_content
     document_content = content
-    return f"Document has been updated successfully! The current content is:\n{document_content}"
+    return (
+        "Document has been updated successfully! "
+        "The current content is:\n{document_content}"
+    )
 
 
 @tool
@@ -63,18 +67,21 @@ def our_agent(state: AgentState) -> AgentState:
         content=f"""
     You are Drafter, a helpful writing assistant.
     You are going to help the user update and modify documents.
-    
+
     - If the user wants to update or modify content,
         use the 'update' tool with the complete updated content.
     - If the user wants to save and finish, you need to use the 'save' tool.
     - Make sure to always show the current document state after modifications.
-    
+
     The current document content is:{document_content}
     """
     )
 
     if not state["messages"]:
-        user_input = "I'm ready to help you update a document. What would you like to create?"
+        user_input = (
+            "I'm ready to help you update a document. "
+            "What would you like to create?"
+        )
         user_message = HumanMessage(content=user_input)
 
     else:

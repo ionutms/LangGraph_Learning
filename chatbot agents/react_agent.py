@@ -1,11 +1,11 @@
 from typing import Annotated, Sequence, TypedDict
+
 from dotenv import load_dotenv
-from langchain_core.messages import BaseMessage
-from langchain_core.messages import SystemMessage
 from langchain.chat_models import init_chat_model
+from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import tool
+from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 load_dotenv()
@@ -40,7 +40,8 @@ model = init_chat_model("groq:llama3-70b-8192").bind_tools(tools)
 
 def model_call(state: AgentState) -> AgentState:
     system_prompt = SystemMessage(
-        content="You are my AI assistant, please answer my query to the best of your ability."
+        content="You are my AI assistant, "
+        "please answer my query to the best of your ability."
     )
     response = model.invoke([system_prompt] + state["messages"])
     return {"messages": [response]}

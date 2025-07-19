@@ -1,8 +1,9 @@
-from dotenv import load_dotenv
 from typing import Annotated, Literal
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
+
+from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -56,8 +57,8 @@ def classify_message(state: State) -> dict:
 
     Returns:
         dict:
-            A dictionary containing the message type, either 'emotional'
-            or 'logical'. This classification is used to route the conversation
+            A dictionary containing the message type, either 'emotional' or
+            'logical'. This classification is used to route the conversation
             to the appropriate agent (therapist or logical assistant).
     """
 
@@ -86,7 +87,8 @@ def router(state: State):
     """Route the conversation based on the message type.
 
     This function checks the message type determined by the classifier and
-    routes the conversation to either the therapist agent or the logical agent.
+    routes the conversation to either the therapist agent or the logical
+    agent.
 
     Args:
         state (State):
@@ -120,8 +122,8 @@ def therapist_agent(state: State) -> dict:
 
     Returns:
         dict:
-            A dictionary containing the assistant's response to the user's last
-            message, focusing on emotional support and empathy.
+            A dictionary containing the assistant's response to the user's
+            last message, focusing on emotional support and empathy.
     """
 
     last_message = state["messages"][-1]
@@ -157,8 +159,9 @@ def logical_agent(state: State) -> dict:
 
     Returns:
         dict:
-            A dictionary containing the assistant's response to the user's last
-            message, focusing on logical analysis and factual information.
+            A dictionary containing the assistant's response to the user's
+            last message, focusing on logical analysis and factual
+            information.
     """
     last_message = state["messages"][-1]
 
