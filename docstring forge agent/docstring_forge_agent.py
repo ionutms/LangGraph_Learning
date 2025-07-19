@@ -3,8 +3,9 @@ import sys
 import tokenize
 from io import StringIO
 from pathlib import Path
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, List, Optional
 
+from docstring_forge_agent_tools import extract_docstrings, find_python_files
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langgraph.graph import END, START, StateGraph
@@ -20,9 +21,7 @@ llm = init_chat_model(
 )
 
 # Global LLM instructions for docstring operations
-LLM_INSTRUCTIONS = {
-    "update": """
-Improve the docstrings in the following Python code.
+UPDATE_PROMPT = """Improve the docstrings in the following Python code.
 Make them more comprehensive, clear, and follow Google docstring
 conventions without the example section.
 Keep maximum 79 chars per line.
@@ -46,8 +45,7 @@ Focus on:
 3. Return value documentation
 4. Example usage where appropriate
 5. Consistent formatting
-""",
-}
+"""
 
 
 class AgentState(TypedDict):
@@ -67,7 +65,7 @@ class AgentState(TypedDict):
     file_path: str
     original_code: str
     processed_code: str
-    action: Literal["remove", "update"]
+    action: str
     docstring_info: List[dict]
     messages: Annotated[list, add_messages]
     error: Optional[str]
@@ -79,79 +77,6 @@ class DocstringProcessor:
 
     def __init__(self):
         self.docstring_nodes = []
-
-    def visit_function_or_class(self, node):
-        """Extract docstring info from function or class nodes.
-
-        Args:
-            node: AST node for a function or class definition.
-
-        Returns:
-            dict: Information about the node's docstring.
-        """
-        docstring_info = {
-            "type": "function"
-            if isinstance(node, ast.FunctionDef)
-            else "class",
-            "name": node.name,
-            "lineno": node.lineno,
-            "docstring": None,
-            "docstring_node": None,
-        }
-
-        if (
-            node.body
-            and isinstance(node.body[0], ast.Expr)
-            and isinstance(node.body[0].value, ast.Constant)
-            and isinstance(node.body[0].value.value, str)
-        ):
-            docstring_info["docstring"] = node.body[0].value.value
-            docstring_info["docstring_node"] = node.body[0]
-
-        return docstring_info
-
-    def extract_docstrings(self, code: str) -> List[dict]:
-        """Extract all docstrings from Python code.
-
-        Args:
-            code: String containing the Python code to analyze.
-
-        Returns:
-            List[dict]: List of dictionaries with docstring info.
-
-        Raises:
-            ValueError: If the code contains invalid Python syntax.
-        """
-        try:
-            tree = ast.parse(code)
-            docstrings = []
-
-            if (
-                tree.body
-                and isinstance(tree.body[0], ast.Expr)
-                and isinstance(tree.body[0].value, ast.Constant)
-                and isinstance(tree.body[0].value.value, str)
-            ):
-                docstrings.append({
-                    "type": "module",
-                    "name": "__module__",
-                    "lineno": tree.body[0].lineno,
-                    "docstring": tree.body[0].value.value,
-                    "docstring_node": tree.body[0],
-                })
-
-            for node in ast.walk(tree):
-                if isinstance(
-                    node,
-                    (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef),
-                ):
-                    docstring_info = self.visit_function_or_class(node)
-                    if docstring_info["docstring"]:
-                        docstrings.append(docstring_info)
-
-            return docstrings
-        except SyntaxError as e:
-            raise ValueError(f"Invalid Python syntax: {e}")
 
     def remove_docstrings_and_comments(self, code: str) -> str:
         """Remove all docstrings and comments from Python code.
@@ -352,7 +277,7 @@ class LLMPromptGenerator:
             for info in state["docstring_info"]
         ])
 
-        return LLM_INSTRUCTIONS["update"].format(
+        return UPDATE_PROMPT.format(
             docstrings_info=docstrings_info,
             original_code=state["original_code"],
         )
@@ -360,39 +285,6 @@ class LLMPromptGenerator:
 
 class FileManager:
     """Manages file operations and discovery."""
-
-    @staticmethod
-    def find_python_files(directory: Path) -> List[Path]:
-        """Find all Python files in directory and subdirectories.
-
-        Args:
-            directory: Path object for the directory to search.
-
-        Returns:
-            List[Path]: Sorted list of Python file paths.
-        """
-        python_files = []
-        skip_dirs = {
-            ".git",
-            "__pycache__",
-            ".pytest_cache",
-            "venv",
-            "env",
-            ".env",
-            "node_modules",
-            ".tox",
-            "build",
-            "dist",
-        }
-
-        for py_file in directory.rglob("*.py"):
-            if any(part in skip_dirs for part in py_file.parts):
-                continue
-            if any(part.startswith(".") for part in py_file.parts):
-                continue
-            python_files.append(py_file)
-
-        return sorted(python_files)
 
     @staticmethod
     def load_file(file_path: Path) -> tuple[str, Optional[str]]:
@@ -574,9 +466,7 @@ class GraphNodeHandler:
             return {}
 
         try:
-            docstring_info = self.processor.extract_docstrings(
-                state["original_code"]
-            )
+            docstring_info = extract_docstrings(state["original_code"])
             return {"docstring_info": docstring_info}
         except Exception as e:
             return {"error": f"Error analyzing docstrings: {e}"}
@@ -791,7 +681,7 @@ class DocstringForge:
         print("=" * 60)
 
         while True:
-            python_files = self.file_manager.find_python_files(current_dir)
+            python_files = find_python_files(current_dir)
 
             if not python_files:
                 print("❌ No Python files found.")
