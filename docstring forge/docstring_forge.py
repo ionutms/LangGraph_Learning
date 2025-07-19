@@ -15,11 +15,13 @@ llm = init_chat_model("groq:llama-3.3-70b-versatile")
 
 # Global LLM instructions for docstring operations
 LLM_INSTRUCTIONS = {
-    "update": """Improve the docstrings in the following Python code.
+    "update": """
+Improve the docstrings in the following Python code.
 Make them more comprehensive, clear, and follow Google docstring
 conventions without the example section.
 Keep makimum 79 chars per line.
 Remove whitespaces from generated docstrings.
+Don't make other changes to the provided code.
 
 Current docstrings found:
 {docstrings_info}
@@ -37,12 +39,13 @@ Focus on:
 4. Example usage where appropriate
 5. Consistent formatting
 """,
-    "generate": """Please add comprehensive docstrings to all functions and
-classes in the following Python code that are missing them.
+    "generate": """
+Add docstrings to all functions and classes that are missing them.
 Follow Google docstring conventions without the example section.
 Keep makimum 79 chars per line.
 Remove whitespaces from generated docstrings.
-Preserve the original code functionality and structure.
+Don't make other changes to the provided code.
+Focus just on docstrings, not code logic.
 
 Code:
 ```python
@@ -54,8 +57,7 @@ For each function/class:
 1. Add a clear description
 2. Document all parameters with types
 3. Document return values
-4. Add examples for complex functions
-5. Use consistent formatting
+4. Use consistent formatting
 """,
 }
 
@@ -393,6 +395,11 @@ class FileManager:
     ) -> Optional[str]:
         """Save the processed code to the output directory.
 
+        Args:
+            file_path (Path): Original file path
+            content (str): Processed code content to save
+            output_dir (Path): Directory to save the processed file
+
         Returns:
             Optional[str]: Error message if saving fails, None on success
         """
@@ -410,6 +417,10 @@ class FileManager:
 
             # Create subdirectories if needed
             output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Ensure content ends with a newline
+            if not content.endswith("\n"):
+                content += "\n"
 
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(content)
