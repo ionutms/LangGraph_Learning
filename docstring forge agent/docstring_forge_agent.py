@@ -16,6 +16,7 @@ LLM_MODELS = [
     "groq:llama-3.3-70b-versatile",
     "groq:deepseek-r1-distill-llama-70b",
     "groq:qwen/qwen3-32b",
+    "groq:moonshotai/kimi-k2-instruct",
 ]
 
 # Global LLM instructions for docstring operations
