@@ -29,6 +29,7 @@ Keep maximum 79 chars per line.
 Remove whitespaces from generated docstrings at lines end.
 Add docstrings to all functions and classes that do not have them.
 Don't make other changes to the provided code.
+Don't refactor the code.
 
 Current docstrings found:
 {docstrings_info}
@@ -244,8 +245,18 @@ class DocstringProcessor:
                 else:
                     indent_level = 0
 
+                # Remove the docstring or comment lines
                 del lines[start_line : end_line + 1]
 
+                # For module docstring, remove trailing newline if present
+                if range_info["type"] == "module":
+                    while (
+                        start_line < len(lines)
+                        and not lines[start_line].strip()
+                    ):
+                        del lines[start_line]
+
+                # Add 'pass' for empty function/class bodies
                 if range_info["type"] == "function_class" and range_info.get(
                     "is_only_body", False
                 ):
@@ -438,9 +449,9 @@ class FileManager:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
-            print(f"✅ Processed file saved: {output_path}")
-            print(f"📁 Original file preserved: {file_path}")
-            print(f"📂 Output directory: {output_dir}")
+            print(f"✅ Saved: {output_path}")
+            print(f"📁 Original: {file_path}")
+            print(f"📂 Output dir: {output_dir}")
 
         except Exception as e:
             return f"Error saving file: {e}"
@@ -456,20 +467,11 @@ class UserInterface:
         Args:
             files: List of Path objects representing Python files.
         """
-        print("📁 Available Python files:")
+        print("📁 Python files:")
         print("-" * 50)
         for i, file_path in enumerate(files, 1):
             try:
-                stat = file_path.stat()
-                size = stat.st_size
-                size_str = (
-                    f"{size:,} bytes"
-                    if size < 1024
-                    else f"{size // 1024:,} KB"
-                )
-                print(
-                    f"{i:2d}. {file_path.relative_to(Path.cwd())} ({size_str})"
-                )
+                print(f"{i:2d}. {file_path.relative_to(Path.cwd())}")
             except OSError:
                 print(f"{i:2d}. {file_path.relative_to(Path.cwd())}")
         print("-" * 50)
@@ -494,23 +496,21 @@ class UserInterface:
             tuple: (action, selected_file, output_dir).
         """
         actions = {"r": "remove", "u": "update"}
-        print("\n🔧 Actions available:")
-        print("  r - Remove all docstrings and comments")
-        print("  u - Update existing docstrings with LLM")
+        print("\n🔧 Actions:")
+        print("  r - Remove docstrings/comments")
+        print("  u - Update docstrings with LLM")
         print("  q - Quit")
 
         while True:
             try:
-                action_input = (
-                    input("\nSelect action (r/u/q): ").lower().strip()
-                )
+                action_input = input("\nSelect action: ").lower().strip()
 
                 if action_input == "q":
                     print("👋 Goodbye!")
                     sys.exit(0)
 
                 if action_input not in actions:
-                    print("❌ Invalid action. Please choose r, u, or q.")
+                    print("❌ Invalid action. Use r, u, or q.")
                     continue
 
                 file_input = input(
@@ -527,9 +527,7 @@ class UserInterface:
                             output_dir,
                         )
                     else:
-                        print(
-                            f"❌ Invalid file number. Please choose 1-{len(files)}."
-                        )
+                        print(f"❌ Invalid file number. Use 1-{len(files)}.")
                 except ValueError:
                     print("❌ Please enter a valid number.")
 
@@ -542,7 +540,7 @@ class GraphNodeHandler:
     """Handles the graph node operations."""
 
     def __init__(self, processor: DocstringProcessor):
-        self.processor = processor
+        self.processor = DocstringProcessor()
         self.prompt_generator = LLMPromptGenerator()
         self.file_manager = FileManager()
 
@@ -754,7 +752,7 @@ class DocstringForge:
         """
         print(f"\n🔧 Processing: {file_path.relative_to(Path.cwd())}")
         print(f"📝 Action: {action}")
-        print(f"📂 Output directory: {output_dir}")
+        print(f"📂 Output dir: {output_dir}")
         print("-" * 50)
 
         initial_state = {
@@ -776,15 +774,13 @@ class DocstringForge:
                 return
 
             if action == "remove":
-                print(
-                    f"🗑️ Removed {len(result['docstring_info'])} docstrings and comments"
-                )
+                print(f"🗑️ Removed {len(result['docstring_info'])} docstrings")
             else:
                 print(
-                    f"📚 Processed {len(result['docstring_info'])} existing docstrings"
+                    f"📚 Processed {len(result['docstring_info'])} docstrings"
                 )
 
-            print("✨ Processing complete!")
+            print("✨ Done!")
 
         except Exception as e:
             print(f"❌ Unexpected error: {e}")
@@ -792,8 +788,8 @@ class DocstringForge:
     def interactive_mode(self):
         """Run the docstring forge in interactive mode."""
         current_dir = Path.cwd()
-        print("🔥 Docstring Forge - Interactive Mode")
-        print(f"📂 Scanning directory: {current_dir}")
+        print("🔥 Docstring Forge - Interactive")
+        print(f"📂 Scanning dir: {current_dir}")
         print("=" * 60)
 
         python_files = self.file_manager.find_python_files(current_dir)
@@ -814,9 +810,7 @@ class DocstringForge:
 
                 while True:
                     continue_choice = (
-                        input("\n🔄 Process another file? (y/n): ")
-                        .lower()
-                        .strip()
+                        input("\n🔄 Process another? (y/n): ").lower().strip()
                     )
                     if continue_choice in ["y", "yes"]:
                         break
@@ -824,7 +818,7 @@ class DocstringForge:
                         print("👋 Goodbye!")
                         return
                     else:
-                        print("❌ Please enter 'y' or 'n'.")
+                        print("❌ Enter 'y' or 'n'.")
 
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
