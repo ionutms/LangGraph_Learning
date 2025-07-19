@@ -1,5 +1,7 @@
 import ast
 import sys
+import tokenize
+from io import StringIO
 from pathlib import Path
 from typing import Annotated, List, Literal, Optional
 
@@ -23,7 +25,7 @@ LLM_INSTRUCTIONS = {
 Improve the docstrings in the following Python code.
 Make them more comprehensive, clear, and follow Google docstring
 conventions without the example section.
-Keep makimum 79 chars per line.
+Keep maximum 79 chars per line.
 Remove whitespaces from generated docstrings at lines end.
 Add docstrings to all functions and classes that do not have them.
 Don't make other changes to the provided code.
@@ -47,19 +49,18 @@ Focus on:
 }
 
 
-# Define the state schema
 class DocstringState(TypedDict):
-    """State for the docstring processing graph.
+    """State for docstring and comment processing graph.
 
     Attributes:
-        file_path (str): Path to the Python file to process
-        original_code (str): Original Python code content
-        processed_code (str): Code after docstring processing
-        action (str): Action to perform - 'remove' or 'update'
-        docstring_info (List[dict]): Information about found docstrings
-        messages (list): Chat messages for LLM interaction
-        error (Optional[str]): Error message if processing fails
-        output_dir (str): Directory to save processed files
+        file_path: Path to the Python file to process.
+        original_code: Original Python code content.
+        processed_code: Code after docstring and comment processing.
+        action: Action to perform - 'remove' or 'update'.
+        docstring_info: Information about found docstrings.
+        messages: Chat messages for LLM interaction.
+        error: Error message if processing fails, None otherwise.
+        output_dir: Directory to save processed files.
     """
 
     file_path: str
@@ -73,13 +74,20 @@ class DocstringState(TypedDict):
 
 
 class DocstringProcessor:
-    """Processes Python files to extract and manipulate docstrings."""
+    """Processes Python files to manage docstrings and comments."""
 
     def __init__(self):
         self.docstring_nodes = []
 
     def visit_function_or_class(self, node):
-        """Extract docstring information from function or class nodes."""
+        """Extract docstring info from function or class nodes.
+
+        Args:
+            node: AST node for a function or class definition.
+
+        Returns:
+            dict: Information about the node's docstring.
+        """
         docstring_info = {
             "type": "function"
             if isinstance(node, ast.FunctionDef)
@@ -90,7 +98,6 @@ class DocstringProcessor:
             "docstring_node": None,
         }
 
-        # Check if the first statement is a docstring
         if (
             node.body
             and isinstance(node.body[0], ast.Expr)
@@ -103,12 +110,21 @@ class DocstringProcessor:
         return docstring_info
 
     def extract_docstrings(self, code: str) -> List[dict]:
-        """Extract all docstrings from Python code."""
+        """Extract all docstrings from Python code.
+
+        Args:
+            code: String containing the Python code to analyze.
+
+        Returns:
+            List[dict]: List of dictionaries with docstring info.
+
+        Raises:
+            ValueError: If the code contains invalid Python syntax.
+        """
         try:
             tree = ast.parse(code)
             docstrings = []
 
-            # Check module-level docstring
             if (
                 tree.body
                 and isinstance(tree.body[0], ast.Expr)
@@ -123,7 +139,6 @@ class DocstringProcessor:
                     "docstring_node": tree.body[0],
                 })
 
-            # Walk through all nodes to find functions and classes
             for node in ast.walk(tree):
                 if isinstance(
                     node,
@@ -137,15 +152,23 @@ class DocstringProcessor:
         except SyntaxError as e:
             raise ValueError(f"Invalid Python syntax: {e}")
 
-    def remove_docstrings(self, code: str) -> str:
-        """Remove all docstrings from Python code."""
+    def remove_docstrings_and_comments(self, code: str) -> str:
+        """Remove all docstrings and comments from Python code.
+
+        Args:
+            code: String containing the Python code to process.
+
+        Returns:
+            str: Code with docstrings and comments removed.
+
+        Raises:
+            ValueError: If an error occurs during processing.
+        """
         try:
-            # Parse the code to identify docstring locations
             tree = ast.parse(code)
             lines = code.split("\n")
-
-            # Collect all docstring ranges to remove with context info
             docstring_ranges = []
+            comment_lines = set()
 
             # Find module docstring
             if (
@@ -195,12 +218,25 @@ class DocstringProcessor:
                             "is_only_body": len(node.body) == 1,
                         })
 
-            docstring_ranges.sort(key=lambda x: x["start"], reverse=True)
+            # Find all comments using tokenize
+            string_io = StringIO(code)
+            tokens = list(tokenize.generate_tokens(string_io.readline))
+            for token in tokens:
+                if token.type == tokenize.COMMENT:
+                    start_line = token.start[0] - 1
+                    comment_lines.add(start_line)
 
-            # Process each docstring range
-            for docstring_info in docstring_ranges:
-                start_line = docstring_info["start"]
-                end_line = docstring_info["end"]
+            # Combine and sort ranges
+            all_ranges = docstring_ranges + [
+                {"start": line, "end": line, "type": "comment"}
+                for line in comment_lines
+            ]
+            all_ranges.sort(key=lambda x: x["start"], reverse=True)
+
+            # Process each range
+            for range_info in all_ranges:
+                start_line = range_info["start"]
+                end_line = range_info["end"]
 
                 if start_line < len(lines):
                     indent_match = lines[start_line].lstrip()
@@ -208,41 +244,39 @@ class DocstringProcessor:
                 else:
                     indent_level = 0
 
-                # Remove the docstring lines
                 del lines[start_line : end_line + 1]
 
-                # If this was the only content in a function/class, add 'pass'
-                if docstring_info[
-                    "type"
-                ] == "function_class" and docstring_info.get(
+                if range_info["type"] == "function_class" and range_info.get(
                     "is_only_body", False
                 ):
                     lines.insert(start_line, " " * indent_level + "pass")
 
-            # Join the lines back together - preserve original formatting
             result = "\n".join(lines)
 
-            # Only validate syntax without reformatting
             try:
                 ast.parse(result)
-            except SyntaxError as _e:
-                # If there's a syntax error, try a minimal fix
+            except SyntaxError:
                 result = self._minimal_syntax_fix(result)
 
             return result
 
         except Exception as e:
-            raise ValueError(f"Error removing docstrings: {e}")
+            raise ValueError(f"Error removing docstrings and comments: {e}")
 
     def _minimal_syntax_fix(self, code: str) -> str:
-        """Apply minimal syntax fixes without reformatting the entire code."""
-        try:
-            return code  # If it parses, return as-is
-        except SyntaxError:
-            # Only if there's a real syntax issue, apply minimal fixes
-            lines = code.split("\n")
+        """Apply minimal syntax fixes without reformatting code.
 
-            # Check for empty function/class bodies and add pass where needed
+        Args:
+            code: String containing the Python code to fix.
+
+        Returns:
+            str: Code with minimal syntax fixes applied.
+        """
+        try:
+            ast.parse(code)
+            return code
+        except SyntaxError:
+            lines = code.split("\n")
             in_function_or_class = False
             indent_stack = []
 
@@ -251,10 +285,8 @@ class DocstringProcessor:
                 if not stripped:
                     continue
 
-                # Calculate indentation
                 indent = len(line) - len(line.lstrip())
 
-                # Check if this line defines a function or class
                 if (
                     stripped.startswith("def ")
                     or stripped.startswith("async def ")
@@ -268,10 +300,7 @@ class DocstringProcessor:
                     expected_indent = indent_stack[-1]
                     if indent <= expected_indent:
                         j = i - 1
-                        while j >= 0 and (
-                            not lines[j].strip()
-                            or lines[j].strip().startswith("#")
-                        ):
+                        while j >= 0 and not lines[j].strip():
                             j -= 1
 
                         if j >= 0:
@@ -281,7 +310,6 @@ class DocstringProcessor:
                                 or prev_line.startswith("async def ")
                                 or prev_line.startswith("class ")
                             ):
-                                # Insert pass statement
                                 lines.insert(
                                     j + 1,
                                     " " * (expected_indent + 4) + "pass",
@@ -299,10 +327,17 @@ class LLMPromptGenerator:
 
     @staticmethod
     def update_prompt(state: DocstringState) -> str:
-        """Create prompt for updating existing docstrings."""
+        """Create prompt for updating existing docstrings.
+
+        Args:
+            state: The current state with docstring info and code.
+
+        Returns:
+            str: Formatted prompt for the LLM.
+        """
         docstrings_info = "\n".join([
             f"- {info['type']} '{info['name']}' (line {info['lineno']}): "
-            f"{info['docstring'][:100]}..."
+            f"{info['docstring'][:50]}..."
             for info in state["docstring_info"]
         ])
 
@@ -317,10 +352,15 @@ class FileManager:
 
     @staticmethod
     def find_python_files(directory: Path) -> List[Path]:
-        """Find all Python files in directory and subdirectories."""
-        python_files = []
+        """Find all Python files in directory and subdirectories.
 
-        # Skip common directories that usually don't need processing
+        Args:
+            directory: Path object for the directory to search.
+
+        Returns:
+            List[Path]: Sorted list of Python file paths.
+        """
+        python_files = []
         skip_dirs = {
             ".git",
             "__pycache__",
@@ -335,10 +375,8 @@ class FileManager:
         }
 
         for py_file in directory.rglob("*.py"):
-            # Skip files in excluded directories
             if any(part in skip_dirs for part in py_file.parts):
                 continue
-            # Skip hidden files
             if any(part.startswith(".") for part in py_file.parts):
                 continue
             python_files.append(py_file)
@@ -349,9 +387,12 @@ class FileManager:
     def load_file(file_path: Path) -> tuple[str, Optional[str]]:
         """Load and validate the Python file.
 
+        Args:
+            file_path: Path object for the file to load.
+
         Returns:
-            tuple: (file_content, error_message) where error_message is
-                   None on success
+            tuple: (file_content, error_message) where error_message
+                   is None on success.
         """
         try:
             if not file_path.exists():
@@ -374,29 +415,23 @@ class FileManager:
         """Save the processed code to the output directory.
 
         Args:
-            file_path (Path): Original file path
-            content (str): Processed code content to save
-            output_dir (Path): Directory to save the processed file
+            file_path: Original file path.
+            content: Processed code content to save.
+            output_dir: Directory to save the processed file.
 
         Returns:
-            Optional[str]: Error message if saving fails, None on success
+            Optional[str]: Error message if saving fails, None on success.
         """
         try:
-            # Create output directory if it doesn't exist
             output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Preserve relative directory structure
             try:
                 relative_path = file_path.relative_to(Path.cwd())
             except ValueError:
                 relative_path = file_path.name
 
             output_path = output_dir / relative_path
-
-            # Create subdirectories if needed
             output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Ensure content ends with a newline
             if not content.endswith("\n"):
                 content += "\n"
 
@@ -407,8 +442,6 @@ class FileManager:
             print(f"📁 Original file preserved: {file_path}")
             print(f"📂 Output directory: {output_dir}")
 
-            return None
-
         except Exception as e:
             return f"Error saving file: {e}"
 
@@ -418,12 +451,15 @@ class UserInterface:
 
     @staticmethod
     def display_files_menu(files: List[Path]) -> None:
-        """Display the list of available Python files."""
+        """Display the list of available Python files.
+
+        Args:
+            files: List of Path objects representing Python files.
+        """
         print("📁 Available Python files:")
         print("-" * 50)
         for i, file_path in enumerate(files, 1):
             try:
-                # Show file size and last modified info
                 stat = file_path.stat()
                 size = stat.st_size
                 size_str = (
@@ -432,8 +468,7 @@ class UserInterface:
                     else f"{size // 1024:,} KB"
                 )
                 print(
-                    f"{i:2d}. {file_path.relative_to(Path.cwd())} "
-                    f"({size_str})"
+                    f"{i:2d}. {file_path.relative_to(Path.cwd())} ({size_str})"
                 )
             except OSError:
                 print(f"{i:2d}. {file_path.relative_to(Path.cwd())}")
@@ -441,16 +476,26 @@ class UserInterface:
 
     @staticmethod
     def get_output_directory() -> str:
-        """Get the output directory from user or use default."""
+        """Get the output directory from user or use default.
+
+        Returns:
+            str: Path to the output directory.
+        """
         return "processed_files"
 
     @staticmethod
     def get_user_choice(files: List[Path]) -> tuple[str, Path, str]:
-        """Get user's choice of action, file, and output directory."""
-        actions = {"r": "remove", "u": "update"}
+        """Get user's choice of action, file, and output directory.
 
+        Args:
+            files: List of Path objects representing Python files.
+
+        Returns:
+            tuple: (action, selected_file, output_dir).
+        """
+        actions = {"r": "remove", "u": "update"}
         print("\n🔧 Actions available:")
-        print("  r - Remove all docstrings")
+        print("  r - Remove all docstrings and comments")
         print("  u - Update existing docstrings with LLM")
         print("  q - Quit")
 
@@ -483,8 +528,7 @@ class UserInterface:
                         )
                     else:
                         print(
-                            f"❌ Invalid file number. Please choose "
-                            f"1-{len(files)}."
+                            f"❌ Invalid file number. Please choose 1-{len(files)}."
                         )
                 except ValueError:
                     print("❌ Please enter a valid number.")
@@ -503,7 +547,14 @@ class GraphNodeHandler:
         self.file_manager = FileManager()
 
     def load_file(self, state: DocstringState) -> dict:
-        """Load and validate the Python file."""
+        """Load and validate the Python file.
+
+        Args:
+            state: The current state containing file path.
+
+        Returns:
+            dict: Updated state with original and processed code.
+        """
         file_path = Path(state["file_path"])
         original_code, error = self.file_manager.load_file(file_path)
 
@@ -516,7 +567,14 @@ class GraphNodeHandler:
         }
 
     def analyze_docstrings(self, state: DocstringState) -> dict:
-        """Analyze and extract docstring information from the code."""
+        """Analyze and extract docstring info from the code.
+
+        Args:
+            state: The current state containing the original code.
+
+        Returns:
+            dict: Updated state with docstring information.
+        """
         if state.get("error"):
             return {}
 
@@ -529,7 +587,14 @@ class GraphNodeHandler:
             return {"error": f"Error analyzing docstrings: {e}"}
 
     def process_docstrings(self, state: DocstringState) -> dict:
-        """Process docstrings based on the specified action."""
+        """Process docstrings and comments based on the action.
+
+        Args:
+            state: The current state containing action and code.
+
+        Returns:
+            dict: Updated state with processed code or LLM messages.
+        """
         if state.get("error"):
             return {}
 
@@ -537,8 +602,10 @@ class GraphNodeHandler:
 
         try:
             if action == "remove":
-                processed_code = self.processor.remove_docstrings(
-                    state["original_code"]
+                processed_code = (
+                    self.processor.remove_docstrings_and_comments(
+                        state["original_code"]
+                    )
                 )
                 return {"processed_code": processed_code}
 
@@ -561,17 +628,21 @@ class GraphNodeHandler:
             return {"error": f"Error processing docstrings: {e}"}
 
     def llm_process(self, state: DocstringState) -> dict:
-        """Use LLM to update docstrings."""
+        """Use LLM to update docstrings.
+
+        Args:
+            state: The current state containing messages.
+
+        Returns:
+            dict: Updated state with processed code and messages.
+        """
         if state.get("error") or not state.get("messages"):
             return {}
 
         try:
             response = llm.invoke(state["messages"])
-
-            # Extract the code from LLM response
             content = response.content
 
-            # Try to extract code block
             if "```python" in content:
                 start = content.find("```python") + 9
                 end = content.find("```", start)
@@ -598,7 +669,14 @@ class GraphNodeHandler:
             return {"error": f"Error in LLM processing: {e}"}
 
     def save_result(self, state: DocstringState) -> dict:
-        """Save the processed code to the output directory."""
+        """Save the processed code to the output directory.
+
+        Args:
+            state: The current state containing processed code.
+
+        Returns:
+            dict: Updated state with error info if any.
+        """
         if state.get("error"):
             return {}
 
@@ -616,14 +694,21 @@ class GraphNodeHandler:
 
     @staticmethod
     def should_use_llm(state: DocstringState) -> str:
-        """Determine if LLM processing is needed."""
+        """Determine if LLM processing is needed.
+
+        Args:
+            state: The current state with action and error status.
+
+        Returns:
+            str: Next node to process ('llm' or 'save').
+        """
         if state.get("error"):
             return "save"
         return "llm" if state["action"] == "update" else "save"
 
 
 class DocstringForge:
-    """Main application class that orchestrates the processing workflow."""
+    """Main class that orchestrates the processing workflow."""
 
     def __init__(self):
         self.processor = DocstringProcessor()
@@ -633,17 +718,18 @@ class DocstringForge:
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
-        """Build and compile the processing graph."""
-        graph_builder = StateGraph(DocstringState)
+        """Build and compile the processing graph.
 
-        # Add nodes
+        Returns:
+            StateGraph: Compiled graph for processing docstrings
+                        and comments.
+        """
+        graph_builder = StateGraph(DocstringState)
         graph_builder.add_node("load", self.handler.load_file)
         graph_builder.add_node("analyze", self.handler.analyze_docstrings)
         graph_builder.add_node("process", self.handler.process_docstrings)
         graph_builder.add_node("llm", self.handler.llm_process)
         graph_builder.add_node("save", self.handler.save_result)
-
-        # Add edges
         graph_builder.add_edge(START, "load")
         graph_builder.add_edge("load", "analyze")
         graph_builder.add_edge("analyze", "process")
@@ -654,19 +740,23 @@ class DocstringForge:
         )
         graph_builder.add_edge("llm", "save")
         graph_builder.add_edge("save", END)
-
         return graph_builder.compile()
 
     def process_file(
         self, action: str, file_path: Path, output_dir: str
     ) -> None:
-        """Process a single file with the specified action."""
+        """Process a single file with the specified action.
+
+        Args:
+            action: Action to perform ('remove' or 'update').
+            file_path: Path to the Python file to process.
+            output_dir: Directory to save the processed file.
+        """
         print(f"\n🔧 Processing: {file_path.relative_to(Path.cwd())}")
         print(f"📝 Action: {action}")
         print(f"📂 Output directory: {output_dir}")
         print("-" * 50)
 
-        # Initialize state
         initial_state = {
             "file_path": str(file_path),
             "action": action,
@@ -679,22 +769,19 @@ class DocstringForge:
         }
 
         try:
-            # Run the graph
             result = self.graph.invoke(initial_state)
 
             if result.get("error"):
                 print(f"❌ Error: {result['error']}")
                 return
 
-            # Show summary
             if action == "remove":
                 print(
-                    f"🗑️  Removed {len(result['docstring_info'])} docstrings"
+                    f"🗑️ Removed {len(result['docstring_info'])} docstrings and comments"
                 )
             else:
                 print(
-                    f"📚 Processed {len(result['docstring_info'])} existing "
-                    "docstrings"
+                    f"📚 Processed {len(result['docstring_info'])} existing docstrings"
                 )
 
             print("✨ Processing complete!")
@@ -705,12 +792,10 @@ class DocstringForge:
     def interactive_mode(self):
         """Run the docstring forge in interactive mode."""
         current_dir = Path.cwd()
-
         print("🔥 Docstring Forge - Interactive Mode")
         print(f"📂 Scanning directory: {current_dir}")
         print("=" * 60)
 
-        # Find all Python files
         python_files = self.file_manager.find_python_files(current_dir)
 
         if not python_files:
@@ -727,7 +812,6 @@ class DocstringForge:
                 )
                 self.process_file(action, selected_file, output_dir)
 
-                # Ask if user wants to process another file
                 while True:
                     continue_choice = (
                         input("\n🔄 Process another file? (y/n): ")
@@ -749,10 +833,7 @@ class DocstringForge:
 
 if __name__ == "__main__":
     forge = DocstringForge()
-
-    # Print the ASCII representation of the graph for debugging
     print("Graph structure:")
     print(forge.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60 + "\n")
-
     forge.interactive_mode()
