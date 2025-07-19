@@ -1,11 +1,13 @@
-import ast
 import sys
-import tokenize
-from io import StringIO
 from pathlib import Path
 from typing import Annotated, List, Optional
 
-from docstring_forge_agent_tools import extract_docstrings, find_python_files
+from docstring_forge_agent_tools import (
+    extract_docstrings_tool,
+    find_python_files_tool,
+    load_file_tool,
+    remove_docstrings_and_comments_tool,
+)
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 from langgraph.graph import END, START, StateGraph
@@ -78,185 +80,6 @@ class DocstringProcessor:
     def __init__(self):
         self.docstring_nodes = []
 
-    def remove_docstrings_and_comments(self, code: str) -> str:
-        """Remove all docstrings and comments from Python code.
-
-        Args:
-            code: String containing the Python code to process.
-
-        Returns:
-            str: Code with docstrings and comments removed.
-
-        Raises:
-            ValueError: If an error occurs during processing.
-        """
-        try:
-            tree = ast.parse(code)
-            lines = code.split("\n")
-            docstring_ranges = []
-            comment_lines = set()
-
-            # Find module docstring
-            if (
-                tree.body
-                and isinstance(tree.body[0], ast.Expr)
-                and isinstance(tree.body[0].value, ast.Constant)
-                and isinstance(tree.body[0].value.value, str)
-            ):
-                start_line = tree.body[0].lineno - 1
-                end_line = (
-                    tree.body[0].end_lineno - 1
-                    if tree.body[0].end_lineno
-                    else start_line
-                )
-                docstring_ranges.append({
-                    "start": start_line,
-                    "end": end_line,
-                    "type": "module",
-                    "node": tree.body[0],
-                })
-
-            # Find function and class docstrings
-            for node in ast.walk(tree):
-                if isinstance(
-                    node,
-                    (ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef),
-                ):
-                    if (
-                        node.body
-                        and isinstance(node.body[0], ast.Expr)
-                        and isinstance(node.body[0].value, ast.Constant)
-                        and isinstance(node.body[0].value.value, str)
-                    ):
-                        docstring_node = node.body[0]
-                        start_line = docstring_node.lineno - 1
-                        end_line = (
-                            docstring_node.end_lineno - 1
-                            if docstring_node.end_lineno
-                            else start_line
-                        )
-                        docstring_ranges.append({
-                            "start": start_line,
-                            "end": end_line,
-                            "type": "function_class",
-                            "node": docstring_node,
-                            "parent": node,
-                            "is_only_body": len(node.body) == 1,
-                        })
-
-            # Find all comments using tokenize
-            string_io = StringIO(code)
-            tokens = list(tokenize.generate_tokens(string_io.readline))
-            for token in tokens:
-                if token.type == tokenize.COMMENT:
-                    start_line = token.start[0] - 1
-                    comment_lines.add(start_line)
-
-            # Combine and sort ranges
-            all_ranges = docstring_ranges + [
-                {"start": line, "end": line, "type": "comment"}
-                for line in comment_lines
-            ]
-            all_ranges.sort(key=lambda x: x["start"], reverse=True)
-
-            # Process each range
-            for range_info in all_ranges:
-                start_line = range_info["start"]
-                end_line = range_info["end"]
-
-                if start_line < len(lines):
-                    indent_match = lines[start_line].lstrip()
-                    indent_level = len(lines[start_line]) - len(indent_match)
-                else:
-                    indent_level = 0
-
-                # Remove the docstring or comment lines
-                del lines[start_line : end_line + 1]
-
-                # For module docstring, remove trailing newline if present
-                if range_info["type"] == "module":
-                    while (
-                        start_line < len(lines)
-                        and not lines[start_line].strip()
-                    ):
-                        del lines[start_line]
-
-                # Add 'pass' for empty function/class bodies
-                if range_info["type"] == "function_class" and range_info.get(
-                    "is_only_body", False
-                ):
-                    lines.insert(start_line, " " * indent_level + "pass")
-
-            result = "\n".join(lines)
-
-            try:
-                ast.parse(result)
-            except SyntaxError:
-                result = self._minimal_syntax_fix(result)
-
-            return result
-
-        except Exception as e:
-            raise ValueError(f"Error removing docstrings and comments: {e}")
-
-    def _minimal_syntax_fix(self, code: str) -> str:
-        """Apply minimal syntax fixes without reformatting code.
-
-        Args:
-            code: String containing the Python code to fix.
-
-        Returns:
-            str: Code with minimal syntax fixes applied.
-        """
-        try:
-            ast.parse(code)
-            return code
-        except SyntaxError:
-            lines = code.split("\n")
-            in_function_or_class = False
-            indent_stack = []
-
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if not stripped:
-                    continue
-
-                indent = len(line) - len(line.lstrip())
-
-                if (
-                    stripped.startswith("def ")
-                    or stripped.startswith("async def ")
-                    or stripped.startswith("class ")
-                ):
-                    in_function_or_class = True
-                    indent_stack.append(indent)
-                    continue
-
-                if in_function_or_class and indent_stack:
-                    expected_indent = indent_stack[-1]
-                    if indent <= expected_indent:
-                        j = i - 1
-                        while j >= 0 and not lines[j].strip():
-                            j -= 1
-
-                        if j >= 0:
-                            prev_line = lines[j].strip()
-                            if prev_line.endswith(":") and (
-                                prev_line.startswith("def ")
-                                or prev_line.startswith("async def ")
-                                or prev_line.startswith("class ")
-                            ):
-                                lines.insert(
-                                    j + 1,
-                                    " " * (expected_indent + 4) + "pass",
-                                )
-
-                        indent_stack.pop()
-                        if not indent_stack:
-                            in_function_or_class = False
-
-            return "\n".join(lines)
-
 
 class LLMPromptGenerator:
     """Generates prompts for LLM-based docstring operations."""
@@ -285,31 +108,6 @@ class LLMPromptGenerator:
 
 class FileManager:
     """Manages file operations and discovery."""
-
-    @staticmethod
-    def load_file(file_path: Path) -> tuple[str, Optional[str]]:
-        """Load and validate the Python file.
-
-        Args:
-            file_path: Path object for the file to load.
-
-        Returns:
-            tuple: (file_content, error_message) where error_message
-                   is None on success.
-        """
-        try:
-            if not file_path.exists():
-                return "", f"File not found: {file_path}"
-
-            if not file_path.suffix == ".py":
-                return "", f"File must be a Python file (.py): {file_path}"
-
-            with open(file_path, "r", encoding="utf-8") as f:
-                original_code = f.read()
-
-            return original_code, None
-        except Exception as e:
-            return "", f"Error loading file: {e}"
 
     @staticmethod
     def save_file(
@@ -343,7 +141,7 @@ class FileManager:
             print(f"📂 Output: {output_dir}")
 
         except Exception as e:
-            return f"Error saving file: {e}"
+            return f"Error saving file: {str(e)}"
 
 
 class UserInterface:
@@ -426,15 +224,15 @@ class UserInterface:
 
 
 class GraphNodeHandler:
-    """Handles the graph node operations."""
+    """Handles the graph node operations for docstring processing."""
 
     def __init__(self, processor: DocstringProcessor):
-        self.processor = DocstringProcessor()
+        self.processor = processor
         self.prompt_generator = LLMPromptGenerator()
         self.file_manager = FileManager()
 
     def load_file(self, state: AgentState) -> dict:
-        """Load and validate the Python file.
+        """Load and validate the Python file using load_file_tool.
 
         Args:
             state: The current state containing file path.
@@ -442,19 +240,19 @@ class GraphNodeHandler:
         Returns:
             dict: Updated state with original and processed code.
         """
-        file_path = Path(state["file_path"])
-        original_code, error = self.file_manager.load_file(file_path)
-
-        if error:
-            return {"error": error}
-
-        return {
-            "original_code": original_code,
-            "processed_code": original_code,
-        }
+        try:
+            result = load_file_tool.invoke({"file_path": state["file_path"]})
+            if result["error"]:
+                return {"error": result["error"]}
+            return {
+                "original_code": result["file_content"],
+                "processed_code": result["file_content"],
+            }
+        except Exception as e:
+            return {"error": f"Error invoking load_file_tool: {str(e)}"}
 
     def analyze_docstrings(self, state: AgentState) -> dict:
-        """Analyze and extract docstring info from the code.
+        """Analyze and extract docstring info using extract_docstrings_tool.
 
         Args:
             state: The current state containing the original code.
@@ -466,13 +264,19 @@ class GraphNodeHandler:
             return {}
 
         try:
-            docstring_info = extract_docstrings(state["original_code"])
-            return {"docstring_info": docstring_info}
+            result = extract_docstrings_tool.invoke({
+                "code": state["original_code"]
+            })
+            if result["error"]:
+                return {"error": result["error"]}
+            return {"docstring_info": result["docstring_info"]}
         except Exception as e:
-            return {"error": f"Error analyzing docstrings: {e}"}
+            return {
+                "error": f"Error invoking extract_docstrings_tool: {str(e)}"
+            }
 
     def process_docstrings(self, state: AgentState) -> dict:
-        """Process docstrings and comments based on the action.
+        """Process docstrings and comments based on action using tools.
 
         Args:
             state: The current state containing action and code.
@@ -487,21 +291,20 @@ class GraphNodeHandler:
 
         try:
             if action == "remove":
-                processed_code = (
-                    self.processor.remove_docstrings_and_comments(
-                        state["original_code"]
-                    )
-                )
-                return {"processed_code": processed_code}
+                result = remove_docstrings_and_comments_tool.invoke({
+                    "code": state["original_code"]
+                })
+                if result["error"]:
+                    return {"error": result["error"]}
+                return {"processed_code": result["processed_code"]}
 
             elif action == "update":
+                prompt = self.prompt_generator.update_prompt(state)
                 return {
                     "messages": [
                         {
                             "role": "user",
-                            "content": self.prompt_generator.update_prompt(
-                                state
-                            ),
+                            "content": prompt,
                         }
                     ]
                 }
@@ -510,7 +313,7 @@ class GraphNodeHandler:
                 return {"error": f"Unknown action: {action}"}
 
         except Exception as e:
-            return {"error": f"Error processing docstrings: {e}"}
+            return {"error": f"Error processing docstrings: {str(e)}"}
 
     def llm_process(self, state: AgentState) -> dict:
         """Use LLM to update docstrings.
@@ -551,7 +354,7 @@ class GraphNodeHandler:
             }
 
         except Exception as e:
-            return {"error": f"Error in LLM processing: {e}"}
+            return {"error": f"Error in LLM processing: {str(e)}"}
 
     def save_result(self, state: AgentState) -> dict:
         """Save the processed code to the output directory.
@@ -681,15 +484,22 @@ class DocstringForge:
         print("=" * 60)
 
         while True:
-            python_files = find_python_files(current_dir)
-
-            if not python_files:
-                print("❌ No Python files found.")
-                return
-
-            print(f"✅ Found {len(python_files)} Python files")
-
             try:
+                result = find_python_files_tool.invoke({
+                    "directory": str(current_dir)
+                })
+                if result["error"]:
+                    print(f"❌ Error: {result['error']}")
+                    return
+
+                python_files = [Path(f) for f in result["python_files"]]
+
+                if not python_files:
+                    print("❌ No Python files found.")
+                    return
+
+                print(f"✅ Found {len(python_files)} Python files")
+
                 self.ui.display_files_menu(python_files)
                 action, selected_file, output_dir = self.ui.get_user_choice(
                     python_files
@@ -730,6 +540,8 @@ class DocstringForge:
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 return
+            except Exception as e:
+                print(f"❌ Error: {str(e)}")
 
 
 if __name__ == "__main__":
