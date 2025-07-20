@@ -64,6 +64,7 @@ class AgentState(TypedDict):
         output_dir: Directory to save processed files.
         saved_file: Path to the saved processed file.
         selected_model: The selected LLM model for docstring updates.
+        available_models: List of available LLM model identifiers.
     """
 
     file_path: str
@@ -76,6 +77,7 @@ class AgentState(TypedDict):
     output_dir: str
     saved_file: str
     selected_model: str
+    available_models: List[str]
 
 
 class DocstringForge:
@@ -111,45 +113,59 @@ class DocstringForge:
             StateGraph: Compiled workflow for processing Python files.
         """
         workflow = StateGraph(AgentState)
-        workflow.add_node("load", self.handler.load_file)
-        workflow.add_node("analyze", self.handler.analyze_docstrings)
-        workflow.add_node("process", self.handler.process_docstrings)
-        workflow.add_node("llm", self.handler.llm_process)
-        workflow.add_node("save", self.handler.save_result)
-        workflow.add_edge(START, "load")
-        workflow.add_edge("load", "analyze")
-        workflow.add_edge("analyze", "process")
-        workflow.add_conditional_edges(
-            "process",
-            self.handler.should_use_llm,
-            {"llm": "llm", "save": "save"},
+
+        # Add nodes with descriptive names
+        workflow.add_node("load_file", self.handler.load_file)
+        workflow.add_node(
+            "analyze_docstrings", self.handler.analyze_docstrings
         )
-        workflow.add_edge("llm", "save")
-        workflow.add_edge("save", END)
+        workflow.add_node(
+            "process_docstrings", self.handler.process_docstrings
+        )
+        workflow.add_node("llm_update", self.handler.llm_process)
+        workflow.add_node("save_file", self.handler.save_result)
+        workflow.add_node("handle_error", self.handler.handle_error)
+
+        # Start workflow
+        workflow.add_edge(START, "load_file")
+
+        # Conditional routing after file loading
+        workflow.add_conditional_edges(
+            "load_file",
+            self.handler.check_load_success,
+            {"success": "analyze_docstrings", "error": "handle_error"},
+        )
+
+        # Conditional routing after docstring analysis
+        workflow.add_conditional_edges(
+            "analyze_docstrings",
+            self.handler.check_analysis_success,
+            {"success": "process_docstrings", "error": "handle_error"},
+        )
+
+        # Main routing decision after processing
+        workflow.add_conditional_edges(
+            "process_docstrings",
+            self.handler.route_processing_outcome,
+            {
+                "update_with_llm": "llm_update",
+                "save_directly": "save_file",
+                "error": "handle_error",
+            },
+        )
+
+        # LLM processing conditional routing
+        workflow.add_conditional_edges(
+            "llm_update",
+            self.handler.check_llm_success,
+            {"success": "save_file", "error": "handle_error"},
+        )
+
+        # End workflow paths
+        workflow.add_edge("save_file", END)
+        workflow.add_edge("handle_error", END)
+
         return workflow.compile()
-
-    def select_model(self) -> str:
-        """Prompt user to select an LLM model from available options.
-
-        Returns:
-            str: Selected LLM model identifier.
-        """
-        print("\nAvailable LLM Models:")
-        for i, model in enumerate(LLM_MODELS, 1):
-            print(f"{i}. {model}")
-        while True:
-            choice = input(
-                f"Select a model (1-{len(LLM_MODELS)} or 'q'): "
-            ).strip()
-            if choice.lower() == "q":
-                return LLM_MODELS[0]
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(LLM_MODELS):
-                    return LLM_MODELS[idx]
-                print(f"Select a number between 1 and {len(LLM_MODELS)}.")
-            except ValueError:
-                print("Invalid input. Enter a number or 'q'.")
 
     def process_file(
         self, action: str, file_path: Path, output_dir: str
@@ -183,6 +199,7 @@ class DocstringForge:
             "output_dir": output_dir,
             "saved_file": "",
             "selected_model": self.selected_model,
+            "available_models": LLM_MODELS,
         }
 
         try:
@@ -215,11 +232,65 @@ class DocstringForge:
                 "docstring_info": [],
             }
 
-    def interactive_mode(self):
+    def create_model_selection_workflow(self) -> StateGraph:
+        """Create a simple workflow for model selection.
+
+        Returns:
+            StateGraph: Compiled workflow for model selection.
+        """
+        workflow = StateGraph(AgentState)
+
+        workflow.add_node("select_model", self.handler.select_model_node)
+        workflow.add_node("handle_error", self.handler.handle_error)
+
+        workflow.add_edge(START, "select_model")
+        workflow.add_conditional_edges(
+            "select_model",
+            self.handler.check_model_selection_success,
+            {"success": END, "error": "handle_error"},
+        )
+        workflow.add_edge("handle_error", END)
+
+        return workflow.compile()
+
+    def select_model_with_workflow(self) -> str:
+        """Use workflow to select LLM model.
+
+        Returns:
+            str: Selected LLM model identifier.
+        """
+        model_workflow = self.create_model_selection_workflow()
+
+        initial_state = {
+            "file_path": "",
+            "action": "",
+            "original_code": "",
+            "processed_code": "",
+            "docstring_info": [],
+            "messages": [],
+            "error": None,
+            "output_dir": "",
+            "saved_file": "",
+            "selected_model": "",
+            "available_models": LLM_MODELS,
+        }
+
+        try:
+            result = model_workflow.invoke(initial_state)
+            if result.get("error"):
+                print(f"Error in model selection: {result['error']}")
+                return LLM_MODELS[0]  # Return default model
+            return result.get("selected_model", LLM_MODELS[0])
+        except Exception as e:
+            print(f"Error in model selection workflow: {str(e)}")
+            return LLM_MODELS[0]  # Return default model
+
+    def run(self):
         """Run the docstring forge in interactive mode."""
         current_dir = Path.cwd()
-        print("🔥 Docstring Forge - Interactive")
+        print("🔥 Docstring Forge - Interactive Mode")
         print(f"📂 Scanning: {current_dir}")
+        print(f"🤖 Using Model: {self.selected_model}")
         print("=" * 60)
 
         while True:
@@ -237,10 +308,14 @@ class DocstringForge:
                     return
 
                 print(f"✅ Found {len(python_files)} Python files")
+
+                # First select the file
                 self.handler.display_files_menu(python_files)
-                action, selected_file, output_dir = (
-                    self.handler.get_user_choice(python_files)
-                )
+                selected_file = self.handler.get_file_choice(python_files)
+
+                # Then select the action
+                action = self.handler.get_action_choice()
+                output_dir = self.handler.get_output_directory()
 
                 max_repeats = 5
                 repeat_count = 0
@@ -275,61 +350,21 @@ class DocstringForge:
             except Exception as e:
                 print(f"❌ Error: {str(e)}")
 
-    def run_batch_mode(self, file_paths: Optional[List[str]] = None):
-        """Run the docstring forge in batch mode with specified files.
-
-        Args:
-            file_paths: List of Python file paths to process (optional).
-        """
-        print("🔥 Docstring Forge - Batch Mode")
-        print(f"📂 Using LLM Model: {self.selected_model}")
-        print("=" * 60)
-
-        if file_paths is None:
-            result = find_python_files_tool.invoke({
-                "directory": str(Path.cwd())
-            })
-            if result["error"]:
-                print(f"❌ Error: {result['error']}")
-                return
-            file_paths = result["python_files"]
-
-        for i, file_path in enumerate(file_paths, 1):
-            print(f"\n[{i}/{len(file_paths)}] Processing: {file_path}")
-            print("-" * 60)
-            self.process_file("update", Path(file_path), "processed_files")
-
 
 if __name__ == "__main__":
     forge = DocstringForge()
     print("Graph structure:")
     print(forge.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60 + "\n")
-    selected_model = forge.select_model()
+
+    # Select model using workflow
+    selected_model = forge.select_model_with_workflow()
     forge.llm = init_chat_model(
         selected_model, temperature=0.0, max_tokens=12000
     )
     forge.selected_model = selected_model
+    forge.handler.llm = forge.llm
     print(f"\nSelected LLM Model: {selected_model}")
+    print("\n" + "=" * 60 + "\n")
 
-    print("\nChoose mode: \n1. Interactive \n2. Batch \n3. Custom batch")
-    mode = input("\nEnter choice (1-3): ").lower().strip()
-
-    if mode == "1":
-        forge.interactive_mode()
-    elif mode == "2":
-        forge.run_batch_mode()
-    elif mode == "3":
-        requests = []
-        print("Enter file paths (empty line to finish):")
-        while True:
-            request = input("File path: ").strip()
-            if not request:
-                break
-            requests.append(request)
-        if requests:
-            forge.run_batch_mode(requests)
-        else:
-            print("No file paths provided.")
-    else:
-        print("Invalid mode selected.")
+    forge.run()

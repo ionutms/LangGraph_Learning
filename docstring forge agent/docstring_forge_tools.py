@@ -303,3 +303,48 @@ def remove_docstrings_and_comments_tool(code: str) -> Dict[str, Any]:
             "processed_code": "",
             "error": f"Error removing docstrings and comments: {str(e)}",
         }
+
+
+@tool
+def select_llm_model_tool(available_models: list) -> Dict[str, Any]:
+    """Tool to select an LLM model from available options.
+
+    Args:
+        available_models: List of available LLM model identifiers.
+
+    Returns:
+        Dict containing selected model or error message.
+    """
+    try:
+        print("\nAvailable LLM Models:")
+        for i, model in enumerate(available_models, 1):
+            print(f"{i}. {model}")
+
+        while True:
+            choice = input(
+                f"\nSelect a model (1-{len(available_models)} or 'q'): "
+            ).strip()
+
+            if choice.lower() == "q":
+                return {"selected_model": available_models[0], "error": None}
+
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(available_models):
+                    return {
+                        "selected_model": available_models[idx],
+                        "error": None,
+                    }
+                print(
+                    f"Select a number between 1 and {len(available_models)}."
+                )
+            except ValueError:
+                print("Invalid input. Enter a number or 'q'.")
+
+    except Exception as e:
+        return {
+            "selected_model": available_models[0]
+            if available_models
+            else None,
+            "error": f"Error in model selection: {str(e)}",
+        }
