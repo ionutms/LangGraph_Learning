@@ -137,22 +137,20 @@ class DocstringForge:
         Returns:
             str: Selected LLM model identifier.
         """
-        print("\nAvailable LLM Models:")
-        for i, model in enumerate(LLM_MODELS, 1):
-            print(f"{i}. {model}")
+        print("Available LLM Models:")
+        for model_index, model in enumerate(LLM_MODELS, 1):
+            print(f"{model_index}. {model}")
         while True:
             choice = input(
-                f"Select a model (1-{len(LLM_MODELS)} or 'q'): "
+                f"\nSelect a model (1-{len(LLM_MODELS)}): "
             ).strip()
-            if choice.lower() == "q":
-                return LLM_MODELS[0]
             try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(LLM_MODELS):
-                    return LLM_MODELS[idx]
+                selected_model_index = int(choice) - 1
+                if 0 <= selected_model_index < len(LLM_MODELS):
+                    return LLM_MODELS[selected_model_index]
                 print(f"Select a number between 1 and {len(LLM_MODELS)}.")
             except ValueError:
-                print("Invalid input. Enter a number or 'q'.")
+                print("Invalid input.")
 
     def process_file(
         self, action: str, file_path: Path, output_dir: str
@@ -278,30 +276,6 @@ class DocstringForge:
             except Exception as e:
                 print(f"❌ Error: {str(e)}")
 
-    def run_batch_mode(self, file_paths: Optional[List[str]] = None):
-        """Run the docstring forge in batch mode with specified files.
-
-        Args:
-            file_paths: List of Python file paths to process (optional).
-        """
-        print("🔥 Docstring Forge - Batch Mode")
-        print(f"📂 Using LLM Model: {self.selected_model}")
-        print("=" * 60)
-
-        if file_paths is None:
-            result = find_python_files_tool.invoke({
-                "directory": str(Path.cwd())
-            })
-            if result["error"]:
-                print(f"❌ Error: {result['error']}")
-                return
-            file_paths = result["python_files"]
-
-        for i, file_path in enumerate(file_paths, 1):
-            print(f"\n[{i}/{len(file_paths)}] Processing: {file_path}")
-            print("-" * 60)
-            self.process_file("update", Path(file_path), "processed_files")
-
 
 if __name__ == "__main__":
     forge = DocstringForge()
@@ -315,24 +289,4 @@ if __name__ == "__main__":
     forge.selected_model = selected_model
     print(f"\nSelected LLM Model: {selected_model}")
 
-    print("\nChoose mode: \n1. Interactive \n2. Batch \n3. Custom batch")
-    mode = input("\nEnter choice (1-3): ").lower().strip()
-
-    if mode == "1":
-        forge.interactive_mode()
-    elif mode == "2":
-        forge.run_batch_mode()
-    elif mode == "3":
-        requests = []
-        print("Enter file paths (empty line to finish):")
-        while True:
-            request = input("File path: ").strip()
-            if not request:
-                break
-            requests.append(request)
-        if requests:
-            forge.run_batch_mode(requests)
-        else:
-            print("No file paths provided.")
-    else:
-        print("Invalid mode selected.")
+    forge.interactive_mode()
