@@ -225,83 +225,9 @@ class DocstringForgeHandlers:
             state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
             return state
 
-    def handle_error(self, state: dict) -> dict:
-        """Handle errors in the workflow.
-
-        Args:
-            state: Agent state with error information.
-
-        Returns:
-            dict: Updated state with error handling messages.
-        """
-        error_msg = state.get("error", "Unknown error occurred")
-        print(f"❌ Workflow Error: {error_msg}")
-        state["messages"].append(
-            AIMessage(content=f"Error handled: {error_msg}")
-        )
-        return state
-
-    # Conditional edge routing methods
-    @staticmethod
-    def check_load_success(state: dict) -> str:
-        """Check if file loading was successful.
-
-        Args:
-            state: Agent state with potential error from loading.
-
-        Returns:
-            str: 'success' if no error, 'error' otherwise.
-        """
-        return "error" if state.get("error") else "success"
-
-    @staticmethod
-    def check_analysis_success(state: dict) -> str:
-        """Check if docstring analysis was successful.
-
-        Args:
-            state: Agent state with potential error from analysis.
-
-        Returns:
-            str: 'success' if no error, 'error' otherwise.
-        """
-        return "error" if state.get("error") else "success"
-
-    @staticmethod
-    def route_processing_outcome(state: dict) -> str:
-        """Route based on processing outcome and action type.
-
-        Determines the next step after processing docstrings based on
-        the action type and whether any errors occurred.
-
-        Args:
-            state: Agent state with action type and error status.
-
-        Returns:
-            str: Next route - 'error', 'update_with_llm', or 'save_directly'.
-        """
-        if state.get("error"):
-            return "error"
-        elif state["action"] == "update":
-            return "update_with_llm"
-        else:
-            return "save_directly"
-
-    @staticmethod
-    def check_llm_success(state: dict) -> str:
-        """Check if LLM processing was successful.
-
-        Args:
-            state: Agent state with potential error from LLM processing.
-
-        Returns:
-            str: 'success' if no error, 'error' otherwise.
-        """
-        return "error" if state.get("error") else "success"
-
-    # Legacy method for backwards compatibility
     @staticmethod
     def should_use_llm(state: dict) -> str:
-        """Determine if LLM processing is needed (legacy method).
+        """Determine if LLM processing is needed.
 
         Args:
             state: Agent state with action and error status.
@@ -313,7 +239,6 @@ class DocstringForgeHandlers:
             return "save"
         return "llm" if state["action"] == "update" else "save"
 
-    # User interaction methods
     @staticmethod
     def display_files_menu(files: List[Path]) -> None:
         """Display the list of available Python files.
@@ -340,109 +265,43 @@ class DocstringForgeHandlers:
         return "processed_files"
 
     @staticmethod
-    def get_file_choice(files: List[Path]) -> Path:
-        """Get user's choice of file to process.
+    def get_user_choice(files: List[Path]) -> tuple[str, Path, str]:
+        """Get user's choice of action, file, and output directory.
 
         Args:
             files: List of Path objects representing Python files.
 
         Returns:
-            Path: Selected file path.
-
-        Raises:
-            SystemExit: If user chooses to quit.
-        """
-        while True:
-            try:
-                file_input = input(
-                    f"\n📁 Select file number (1-{len(files)} or 'q'): "
-                ).strip()
-                if file_input.lower() == "q":
-                    print("👋 Goodbye!")
-                    sys.exit(0)
-                try:
-                    file_index = int(file_input) - 1
-                    if 0 <= file_index < len(files):
-                        return files[file_index]
-                    print(f"❌ Invalid file number. Use 1-{len(files)}.")
-                except ValueError:
-                    print("❌ Please enter a valid number.")
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                sys.exit(0)
-
-    @staticmethod
-    def get_action_choice() -> str:
-        """Get user's choice of action to perform.
-
-        Returns:
-            str: Selected action ('remove' or 'update').
-
-        Raises:
-            SystemExit: If user chooses to quit.
+            tuple: (action, selected_file, output_dir).
         """
         actions = {"r": "remove", "u": "update"}
         print("\n🔧 Actions:")
         print("  r - Remove docstrings/comments")
         print("  u - Update docstrings with LLM")
         print("  q - Quit")
-
         while True:
             try:
-                action_input = input("\n🔧 Select action: ").lower().strip()
+                action_input = input("\nSelect action: ").lower().strip()
                 if action_input == "q":
                     print("👋 Goodbye!")
                     sys.exit(0)
-                if action_input in actions:
-                    return actions[action_input]
-                print("❌ Invalid action. Use r, u, or q.")
+                if action_input not in actions:
+                    print("❌ Invalid action. Use r, u, or q.")
+                    continue
+                file_input = input(
+                    f"Select file number (1-{len(files)}): "
+                ).strip()
+                try:
+                    file_index = int(file_input) - 1
+                    if 0 <= file_index < len(files):
+                        return (
+                            actions[action_input],
+                            files[file_index],
+                            DocstringForgeHandlers.get_output_directory(),
+                        )
+                    print(f"❌ Invalid file number. Use 1-{len(files)}.")
+                except ValueError:
+                    print("❌ Please enter a valid number.")
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 sys.exit(0)
-
-    def select_model_node(self, state: dict) -> dict:
-        """Select LLM model using the selection tool.
-
-        Args:
-            state: Agent state with available models.
-
-        Returns:
-            dict: Updated state with selected model or error.
-        """
-        try:
-            from docstring_forge_tools import select_llm_model_tool
-
-            result = select_llm_model_tool.invoke({
-                "available_models": state["available_models"]
-            })
-
-            if result["error"]:
-                state["error"] = result["error"]
-                state["messages"].append(
-                    AIMessage(content=f"Error: {result['error']}")
-                )
-            else:
-                state["selected_model"] = result["selected_model"]
-                state["messages"].append(
-                    AIMessage(
-                        content=f"Selected model: {result['selected_model']}"
-                    )
-                )
-
-            return state
-        except Exception as e:
-            state["error"] = f"Error in model selection: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            return state
-
-    @staticmethod
-    def check_model_selection_success(state: dict) -> str:
-        """Check if model selection was successful.
-
-        Args:
-            state: Agent state with potential error from model selection.
-
-        Returns:
-            str: 'success' if no error, 'error' otherwise.
-        """
-        return "error" if state.get("error") else "success"
