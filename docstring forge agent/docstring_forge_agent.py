@@ -122,7 +122,10 @@ class DocstringForge:
         workflow.add_conditional_edges(
             "process",
             self.handler.should_use_llm,
-            {"llm": "llm", "save": "save"},
+            {
+                "use_llm": "llm",
+                "skip_llm": "save",
+            },
         )
         workflow.add_edge("llm", "save")
         workflow.add_edge("save", END)

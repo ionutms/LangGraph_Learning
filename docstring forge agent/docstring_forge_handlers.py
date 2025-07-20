@@ -233,11 +233,11 @@ class DocstringForgeHandlers:
             state: Agent state with action and error status.
 
         Returns:
-            str: Next node to process ('llm' or 'save').
+            str: Next edge to follow ('use_llm' or 'skip_llm').
         """
         if state.get("error"):
-            return "save"
-        return "llm" if state["action"] == "update" else "save"
+            return "skip_llm"
+        return "use_llm" if state["action"] == "update" else "skip_llm"
 
     @staticmethod
     def display_files_menu(files: List[Path]) -> None:
