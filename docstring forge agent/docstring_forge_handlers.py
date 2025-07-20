@@ -266,7 +266,7 @@ class DocstringForgeHandlers:
 
     @staticmethod
     def get_user_choice(files: List[Path]) -> tuple[str, Path, str]:
-        """Get user's choice of action, file, and output directory.
+        """Get user's choice of file, action, and output directory.
 
         Args:
             files: List of Path objects representing Python files.
@@ -275,10 +275,44 @@ class DocstringForgeHandlers:
             tuple: (action, selected_file, output_dir).
         """
         actions = {"r": "remove", "u": "update"}
+
+        while True:
+            try:
+                file_input = (
+                    input(
+                        f"\nSelect file number (1-{len(files)}) "
+                        "or q to quit: "
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                if file_input == "q":
+                    print("👋 Goodbye!")
+                    sys.exit(0)
+
+                try:
+                    file_index = int(file_input) - 1
+                    if 0 <= file_index < len(files):
+                        selected_file = files[file_index]
+                        break
+                    print(f"❌ Invalid file number. Use 1-{len(files)}.")
+                except ValueError:
+                    print("❌ Please enter a valid number.")
+            except KeyboardInterrupt:
+                print("\n👋 Goodbye!")
+                sys.exit(0)
+
+        try:
+            rel_path = selected_file.relative_to(Path.cwd())
+            print(f"\n📁 Selected file: {rel_path}")
+        except ValueError:
+            print(f"\n📁 Selected file: {selected_file}")
         print("\n🔧 Actions:")
         print("  r - Remove docstrings/comments")
         print("  u - Update docstrings with LLM")
         print("  q - Quit")
+
         while True:
             try:
                 action_input = input("\nSelect action: ").lower().strip()
@@ -288,20 +322,12 @@ class DocstringForgeHandlers:
                 if action_input not in actions:
                     print("❌ Invalid action. Use r, u, or q.")
                     continue
-                file_input = input(
-                    f"Select file number (1-{len(files)}): "
-                ).strip()
-                try:
-                    file_index = int(file_input) - 1
-                    if 0 <= file_index < len(files):
-                        return (
-                            actions[action_input],
-                            files[file_index],
-                            DocstringForgeHandlers.get_output_directory(),
-                        )
-                    print(f"❌ Invalid file number. Use 1-{len(files)}.")
-                except ValueError:
-                    print("❌ Please enter a valid number.")
+
+                return (
+                    actions[action_input],
+                    selected_file,
+                    DocstringForgeHandlers.get_output_directory(),
+                )
             except KeyboardInterrupt:
                 print("\n👋 Goodbye!")
                 sys.exit(0)
