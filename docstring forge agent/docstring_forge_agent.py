@@ -5,6 +5,7 @@ from docstring_forge_handlers import DocstringForgeHandlers
 from docstring_forge_tools import find_python_files_tool
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
@@ -92,17 +93,36 @@ class DocstringForge:
         handler: Instance of DocstringForgeHandlers for node operations.
     """
 
-    def __init__(self, model: str = LLM_MODELS[0]):
-        """Initialize the DocstringForge with LLM and workflow.
+    def __init__(self, model: str = None):
+        """Initialize the DocstringForge with workflow.
 
         Args:
-            model: LLM model identifier (default: first model in LLM_MODELS).
+            model: LLM model identifier (optional, set when needed).
+        """
+        self.llm = None
+        self.selected_model = model
+        self.sv_prompt = LLM_INSTRUCTIONS
+        self.handler = DocstringForgeHandlers(None, self.sv_prompt)
+        self.graph = self.create_workflow()
+
+    def initialize_llm(self, model: str):
+        """Initialize LLM with selected model.
+
+        Args:
+            model: LLM model identifier to initialize.
         """
         self.llm = init_chat_model(model, temperature=0.0, max_tokens=12000)
         self.selected_model = model
-        self.sv_prompt = LLM_INSTRUCTIONS
-        self.handler = DocstringForgeHandlers(self.llm, self.sv_prompt)
-        self.graph = self.create_workflow()
+        self.handler.llm = self.llm
+        # Initialize the prompt template now that LLM is available
+        self.handler.sv_prompt = ChatPromptTemplate.from_messages([
+            ("system", self.sv_prompt),
+            (
+                "user",
+                "{docstrings_info}\n\nOriginal code:"
+                "\n```python\n{original_code}\n```",
+            ),
+        ])
 
     def create_workflow(self) -> StateGraph:
         """Create and compile the LangGraph workflow for docstring processing.
@@ -243,6 +263,12 @@ class DocstringForge:
                     self.handler.get_user_choice(python_files)
                 )
 
+                # Initialize LLM only for update action
+                if action == "update" and self.llm is None:
+                    selected_model = self.select_model()
+                    self.initialize_llm(selected_model)
+                    print(f"\n🤖 Selected LLM Model: {selected_model}")
+
                 max_repeats = 5
                 repeat_count = 0
                 while repeat_count < max_repeats:
@@ -282,11 +308,5 @@ if __name__ == "__main__":
     print("Graph structure:")
     print(forge.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60 + "\n")
-    selected_model = forge.select_model()
-    forge.llm = init_chat_model(
-        selected_model, temperature=0.0, max_tokens=12000
-    )
-    forge.selected_model = selected_model
-    print(f"\nSelected LLM Model: {selected_model}")
 
     forge.interactive_mode()

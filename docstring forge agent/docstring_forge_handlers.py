@@ -8,7 +8,6 @@ from docstring_forge_tools import (
     remove_docstrings_and_comments_tool,
 )
 from langchain_core.messages import AIMessage
-from langchain_core.prompts import ChatPromptTemplate
 
 
 class DocstringForgeHandlers:
@@ -26,18 +25,12 @@ class DocstringForgeHandlers:
         """Initialize the handlers with LLM and prompt.
 
         Args:
-            llm: Initialized language model for docstring updates.
+            llm: Initialized language model (can be None initially).
             sv_prompt: Prompt template string for LLM docstring generation.
         """
         self.llm = llm
-        self.sv_prompt = ChatPromptTemplate.from_messages([
-            ("system", sv_prompt),
-            (
-                "user",
-                "{docstrings_info}\n\nOriginal code:"
-                "\n```python\n{original_code}\n```",
-            ),
-        ])
+        self.sv_prompt_template = sv_prompt
+        self.sv_prompt = None
 
     def load_file(self, state: dict) -> dict:
         """Load and validate the Python file using load_file_tool.
@@ -130,6 +123,13 @@ class DocstringForgeHandlers:
                     )
                 return state
             elif action == "update":
+                if not self.llm or not self.sv_prompt:
+                    state["error"] = "LLM not initialized for update action"
+                    state["messages"].append(
+                        AIMessage(content="Error: LLM not initialized")
+                    )
+                    return state
+
                 docstrings_info = "\n".join([
                     f"- {info['type']} '{info['name']}' "
                     f"(line {info['lineno']}): "
@@ -171,6 +171,14 @@ class DocstringForgeHandlers:
         """
         if state.get("error") or not state.get("messages"):
             return state
+
+        if not self.llm:
+            state["error"] = "LLM not initialized for processing"
+            state["messages"].append(
+                AIMessage(content="Error: LLM not initialized")
+            )
+            return state
+
         try:
             response = self.llm.invoke(state["messages"])
             content = response.content
