@@ -157,17 +157,21 @@ class DocstringForge:
         Returns:
             str: Selected LLM model identifier.
         """
-        print("Available LLM Models:")
+        print("\nAvailable LLM Models:")
         for model_index, model in enumerate(LLM_MODELS, 1):
-            print(f"{model_index}. {model}")
+            current_indicator = (
+                " (current)" if model == self.selected_model else ""
+            )
+            print(f"{model_index}. {model}{current_indicator}")
+
         while True:
             choice = input(
                 f"\nSelect a model (1-{len(LLM_MODELS)}): "
             ).strip()
             try:
-                selected_model_index = int(choice) - 1
-                if 0 <= selected_model_index < len(LLM_MODELS):
-                    return LLM_MODELS[selected_model_index]
+                selected_index = int(choice) - 1
+                if 0 <= selected_index < len(LLM_MODELS):
+                    return LLM_MODELS[selected_index]
                 print(f"Select a number between 1 and {len(LLM_MODELS)}.")
             except ValueError:
                 print("Invalid input.")
@@ -210,8 +214,9 @@ class DocstringForge:
             result = self.graph.invoke(initial_state)
             success = not bool(result.get("error"))
             if success:
+                action_verb = "Removed" if action == "remove" else "Updated"
                 print(
-                    f"✅ {'Removed' if action == 'remove' else 'Updated'} "
+                    f"✅ {action_verb} "
                     f"{len(result['docstring_info'])} docstrings"
                 )
             else:
@@ -263,11 +268,16 @@ class DocstringForge:
                     self.handler.get_user_choice(python_files)
                 )
 
-                # Initialize LLM only for update action
-                if action == "update" and self.llm is None:
+                # Initialize or reselect LLM for update action
+                if action == "update":
                     selected_model = self.select_model()
-                    self.initialize_llm(selected_model)
-                    print(f"\n🤖 Selected LLM Model: {selected_model}")
+
+                    # Only reinitialize if model changed
+                    if selected_model != self.selected_model:
+                        self.initialize_llm(selected_model)
+                        print(f"\n🤖 Selected LLM Model: {selected_model}")
+                    else:
+                        print(f"\n🤖 Using LLM Model: {selected_model}")
 
                 max_repeats = 5
                 repeat_count = 0
