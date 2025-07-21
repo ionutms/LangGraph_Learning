@@ -2,8 +2,6 @@ from typing import Annotated, Optional
 
 from chatbot_handlers import ChatbotHandlers
 from dotenv import load_dotenv
-from langchain.chat_models import init_chat_model
-from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
@@ -56,38 +54,14 @@ class ChatbotApp:
     Manages a workflow for chatting with an AI assistant.
 
     Attributes:
-        llm: Initialized language model.
-        selected_model: Selected LLM model identifier.
-        chat_prompt: Prompt template for LLM.
         graph: Compiled LangGraph workflow.
         handler: Instance of ChatbotHandlers.
     """
 
-    def __init__(self, model: str = None):
-        """Initialize the ChatbotApp.
-
-        Args:
-            model: LLM model identifier (optional).
-        """
-        self.llm = None
-        self.selected_model = model
-        self.chat_prompt = LLM_INSTRUCTIONS
-        self.handler = ChatbotHandlers(None, self.chat_prompt, LLM_MODELS)
+    def __init__(self):
+        """Initialize the ChatbotApp."""
+        self.handler = ChatbotHandlers(LLM_INSTRUCTIONS, LLM_MODELS)
         self.graph = self.create_workflow()
-
-    def initialize_llm(self, model: str):
-        """Initialize LLM with selected model.
-
-        Args:
-            model: LLM model identifier to initialize.
-        """
-        self.llm = init_chat_model(model, temperature=0.0, max_tokens=4000)
-        self.selected_model = model
-        self.handler.llm = self.llm
-        self.handler.chat_prompt = ChatPromptTemplate.from_messages([
-            ("system", self.chat_prompt),
-            ("user", "User message: {user_input}"),
-        ])
 
     def create_workflow(self) -> StateGraph:
         """Create and compile the LangGraph workflow for chatbot.
@@ -139,14 +113,12 @@ class ChatbotApp:
             "messages": [],
             "error": None,
             "response": "",
-            "selected_model": self.selected_model or "",
+            "selected_model": "",
             "continue_chatting": True,
             "user_choice": "",
         }
 
         try:
-            # Set the handler's app reference for LLM initialization
-            self.handler.app = self
             self.graph.invoke(initial_state)
             print("👋 Goodbye!")
         except KeyboardInterrupt:

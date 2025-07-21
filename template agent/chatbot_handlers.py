@@ -3,7 +3,9 @@ from chatbot_tools import (
     model_selection_tool,
     user_input_tool,
 )
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
 
 
 class ChatbotHandlers:
@@ -15,22 +17,33 @@ class ChatbotHandlers:
         llm: Initialized language model.
         chat_prompt: Prompt template for LLM.
         available_models: List of available LLM models.
-        app: Reference to the ChatbotApp instance.
     """
 
-    def __init__(self, llm, chat_prompt: str, available_models: list):
+    def __init__(self, chat_prompt_template: str, available_models: list):
         """Initialize the handlers.
 
         Args:
-            llm: Initialized language model (can be None initially).
-            chat_prompt: Prompt template string for LLM.
+            chat_prompt_template: Prompt template string for LLM.
             available_models: List of available LLM model identifiers.
         """
-        self.llm = llm
-        self.chat_prompt_template = chat_prompt
+        self.llm = None
+        self.chat_prompt_template = chat_prompt_template
         self.chat_prompt = None
         self.available_models = available_models
-        self.app = None
+        self.selected_model = ""
+
+    def initialize_llm(self, model: str):
+        """Initialize LLM with selected model.
+
+        Args:
+            model: LLM model identifier to initialize.
+        """
+        self.llm = init_chat_model(model, temperature=0.0, max_tokens=4000)
+        self.selected_model = model
+        self.chat_prompt = ChatPromptTemplate.from_messages([
+            ("system", self.chat_prompt_template),
+            ("user", "User message: {user_input}"),
+        ])
 
     def select_model(self, state: dict) -> dict:
         """Handle model selection using the model selection tool.
@@ -63,8 +76,7 @@ class ChatbotHandlers:
             )
 
             # Initialize LLM with selected model
-            if self.app:
-                self.app.initialize_llm(selected_model)
+            self.initialize_llm(selected_model)
 
             return state
 
