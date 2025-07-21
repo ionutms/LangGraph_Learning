@@ -4,50 +4,10 @@ from langchain_core.tools import tool
 
 
 @tool
-def dummy_tool(input_data: str) -> Dict[str, Any]:
-    """A dummy tool that processes input data.
-
-    This tool doesn't perform any real processing - it's a placeholder
-    that demonstrates the tool interface pattern. It simply formats the
-    input with a basic processing indicator.
-
-    Args:
-        input_data: String containing the input data to "process".
-
-    Returns:
-        Dict: Contains 'processed_data' (the "processed" input) and 'error'.
-    """
-    try:
-        # Validate inputs
-        if not input_data:
-            return {
-                "processed_data": "",
-                "error": "Input data cannot be empty",
-            }
-
-        # "Process" the data - just add a processing indicator
-        processed = f"[PROCESSED] {input_data}"
-
-        return {
-            "processed_data": processed,
-            "error": "",
-        }
-
-    except Exception as e:
-        return {
-            "processed_data": "",
-            "error": f"Error in dummy tool processing: {str(e)}",
-        }
-
-
-@tool
 def model_selection_tool(
     available_models: List[str], current_model: str = ""
 ) -> Dict[str, Any]:
     """Tool for selecting an LLM model from available options.
-
-    Prompts the user to select a model from the list of available
-    models and returns the selected model identifier.
 
     Args:
         available_models: List of available model identifiers.
@@ -77,7 +37,7 @@ def model_selection_tool(
                 selected_index = int(choice) - 1
                 if 0 <= selected_index < len(available_models):
                     selected_model = available_models[selected_index]
-                    print(f"\n🤖 Selected LLM Model: {selected_model}")
+                    print(f"\n🤖 Selected: {selected_model}")
                     print("=" * 60)
                     return {
                         "selected_model": selected_model,
@@ -103,25 +63,23 @@ def model_selection_tool(
 
 @tool
 def user_input_tool() -> Dict[str, Any]:
-    """Tool for getting user input data.
-
-    Prompts the user to enter input data and validates it.
+    """Tool for getting user input for chat.
 
     Returns:
         Dict: Contains 'input_data' and 'error'.
     """
     try:
-        print("\n📝 Enter your input:")
-        input_data = input("> ").strip()
+        print("\n💬 You:")
+        user_message = input("> ").strip()
 
-        if not input_data:
+        if not user_message:
             return {
                 "input_data": "",
-                "error": "Please provide some input.",
+                "error": "Please enter a message.",
             }
 
         return {
-            "input_data": input_data,
+            "input_data": user_message,
             "error": "",
         }
 
@@ -138,61 +96,19 @@ def user_input_tool() -> Dict[str, Any]:
 
 
 @tool
-def display_tool(
-    result: str, error: str = "", success: bool = True
-) -> Dict[str, Any]:
-    """Tool for displaying processing results to the user.
-
-    Shows the processing results or error messages to the user in a
-    formatted way.
-
-    Args:
-        result: The processing result to display.
-        error: Error message if processing failed.
-        success: Whether the processing was successful.
-
-    Returns:
-        Dict: Contains operation status and any error.
-    """
-    try:
-        if success and result:
-            print("\n📊 Result:")
-            print(f"{result}")
-            print("✨ Done!")
-        elif error:
-            print(f"❌ Error: {error}")
-        else:
-            print("⚠️  No result to display")
-
-        return {
-            "displayed": True,
-            "error": "",
-        }
-
-    except Exception as e:
-        return {
-            "displayed": False,
-            "error": f"Error displaying results: {str(e)}",
-        }
-
-
-@tool
 def continue_prompt_tool() -> Dict[str, Any]:
-    """Tool for asking user whether to continue processing.
-
-    Prompts the user to decide whether to continue with more input
-    or exit the application.
+    """Tool for asking user whether to continue chatting.
 
     Returns:
         Dict: Contains 'continue' (bool), 'user_input', and 'error'.
     """
     try:
-        choice = input("\n🔄 Process more input? (y/n): ").lower().strip()
+        choice = input("\n🔄 Continue chatting? (y/n): ").lower().strip()
 
-        continue_processing = choice in ["y", "yes"]
+        continue_chatting = choice in ["y", "yes"]
 
         return {
-            "continue": continue_processing,
+            "continue": continue_chatting,
             "user_input": choice,
             "error": "",
         }

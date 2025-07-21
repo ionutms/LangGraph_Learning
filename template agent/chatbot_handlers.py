@@ -1,0 +1,211 @@
+from chatbot_tools import (
+    continue_prompt_tool,
+    model_selection_tool,
+    user_input_tool,
+)
+from langchain_core.messages import AIMessage
+
+
+class ChatbotHandlers:
+    """Handlers for ChatbotApp workflow steps.
+
+    Manages input processing and chat responses for the simple chatbot.
+
+    Attributes:
+        llm: Initialized language model.
+        chat_prompt: Prompt template for LLM.
+        available_models: List of available LLM models.
+        app: Reference to the ChatbotApp instance.
+    """
+
+    def __init__(self, llm, chat_prompt: str, available_models: list):
+        """Initialize the handlers.
+
+        Args:
+            llm: Initialized language model (can be None initially).
+            chat_prompt: Prompt template string for LLM.
+            available_models: List of available LLM model identifiers.
+        """
+        self.llm = llm
+        self.chat_prompt_template = chat_prompt
+        self.chat_prompt = None
+        self.available_models = available_models
+        self.app = None
+
+    def select_model(self, state: dict) -> dict:
+        """Handle model selection using the model selection tool.
+
+        Args:
+            state: Agent state.
+
+        Returns:
+            dict: Updated state with selected model.
+        """
+        try:
+            result = model_selection_tool.invoke({
+                "available_models": self.available_models,
+                "current_model": state.get("selected_model", ""),
+            })
+
+            if result["error"]:
+                state["error"] = result["error"]
+                state["messages"].append(
+                    AIMessage(
+                        content=f"Model Selection Error: {result['error']}"
+                    )
+                )
+                return state
+
+            selected_model = result["selected_model"]
+            state["selected_model"] = selected_model
+            state["messages"].append(
+                AIMessage(content=f"Selected model: {selected_model}")
+            )
+
+            # Initialize LLM with selected model
+            if self.app:
+                self.app.initialize_llm(selected_model)
+
+            return state
+
+        except Exception as e:
+            state["error"] = f"Error selecting model: {str(e)}"
+            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+            return state
+
+    def get_user_input(self, state: dict) -> dict:
+        """Handle getting user input using the user input tool.
+
+        Args:
+            state: Agent state.
+
+        Returns:
+            dict: Updated state with user input.
+        """
+        try:
+            result = user_input_tool.invoke({})
+
+            if result["error"]:
+                state["error"] = result["error"]
+                state["messages"].append(
+                    AIMessage(content=f"Input Error: {result['error']}")
+                )
+                return state
+
+            user_input = result["input_data"]
+            state["user_input"] = user_input
+
+            state["messages"].append(
+                AIMessage(content=f"Received: {user_input}")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error"] = f"Error getting user input: {str(e)}"
+            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+            return state
+
+    def chat_response(self, state: dict) -> dict:
+        """Generate and display chat response using LLM.
+
+        Args:
+            state: Agent state with user input.
+
+        Returns:
+            dict: Updated state with AI response.
+        """
+        try:
+            if self.llm and self.chat_prompt:
+                try:
+                    prompt = self.chat_prompt.invoke({
+                        "user_input": state["user_input"],
+                    }).to_messages()
+
+                    response = self.llm.invoke(prompt)
+                    ai_response = response.content.strip()
+                    state["response"] = ai_response
+
+                    # Display the response
+                    print(f"\n🤖 Assistant: \n{ai_response}")
+                    print("-" * 50)
+
+                    state["messages"].append(
+                        AIMessage(content="Generated response successfully")
+                    )
+
+                except Exception as e:
+                    error_msg = f"LLM error: {str(e)}"
+                    state["error"] = error_msg
+                    state["response"] = "Sorry, I encountered an error."
+                    print(f"❌ {error_msg}")
+                    state["messages"].append(
+                        AIMessage(content=f"LLM Error: {str(e)}")
+                    )
+            else:
+                error_msg = "No LLM available"
+                state["error"] = error_msg
+                state["response"] = "Sorry, no AI model is available."
+                print(f"❌ {error_msg}")
+                state["messages"].append(
+                    AIMessage(content="No LLM available")
+                )
+
+            return state
+
+        except Exception as e:
+            state["error"] = f"Error generating response: {str(e)}"
+            state["response"] = "Sorry, I encountered an error."
+            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+            print(f"❌ Error: {str(e)}")
+            return state
+
+    def ask_continue(self, state: dict) -> dict:
+        """Handle asking user whether to continue chatting.
+
+        Args:
+            state: Agent state.
+
+        Returns:
+            dict: Updated state with continue decision.
+        """
+        try:
+            result = continue_prompt_tool.invoke({})
+
+            if result["error"]:
+                state["error"] = result["error"]
+                state["continue_chatting"] = False
+                state["messages"].append(
+                    AIMessage(
+                        content=f"Continue Prompt Error: {result['error']}"
+                    )
+                )
+                return state
+
+            should_continue = result["continue"]
+            user_input = result["user_input"]
+
+            state["continue_chatting"] = should_continue
+            state["user_choice"] = user_input
+            state["messages"].append(
+                AIMessage(
+                    content=(
+                        f"User chose to "
+                        f"{'continue' if should_continue else 'exit'}"
+                    )
+                )
+            )
+
+            # Clear previous input and response for next iteration
+            if should_continue:
+                state["user_input"] = ""
+                state["response"] = ""
+                state["error"] = None
+
+            return state
+
+        except Exception as e:
+            state["error"] = f"Error asking to continue: {str(e)}"
+            state["continue_chatting"] = False
+            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+            return state
