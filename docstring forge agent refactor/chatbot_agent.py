@@ -38,6 +38,7 @@ class AgentState(TypedDict):
         continue_chatting: Whether to continue in interactive mode.
         user_choice: User's choice for continuing.
         python_files: List of Python file paths found in directory.
+        selected_file: Selected Python file path.
     """
 
     user_input: str
@@ -48,12 +49,14 @@ class AgentState(TypedDict):
     continue_chatting: bool
     user_choice: str
     python_files: list[str]
+    selected_file: str
 
 
 class ChatbotApp:
     """Simple chatbot application using LangGraph.
 
-    Manages a workflow for chatting with an AI assistant.
+    Manages a workflow for finding and selecting Python files and chatting
+    with an AI assistant.
 
     Attributes:
         graph: Compiled LangGraph workflow.
@@ -75,6 +78,7 @@ class ChatbotApp:
 
         # Add nodes
         workflow.add_node("find_files", self.handler.find_files)
+        workflow.add_node("select_file", self.handler.select_file)
         workflow.add_node("select_model", self.handler.select_model)
         workflow.add_node("get_user_input", self.handler.get_user_input)
         workflow.add_node("chat_response", self.handler.chat_response)
@@ -82,7 +86,8 @@ class ChatbotApp:
 
         # Define edges
         workflow.add_edge(START, "find_files")
-        workflow.add_edge("find_files", "select_model")
+        workflow.add_edge("find_files", "select_file")
+        workflow.add_edge("select_file", "select_model")
         workflow.add_edge("select_model", "get_user_input")
         workflow.add_edge("get_user_input", "chat_response")
         workflow.add_edge("chat_response", "ask_continue")
@@ -121,6 +126,7 @@ class ChatbotApp:
             "continue_chatting": True,
             "user_choice": "",
             "python_files": [],
+            "selected_file": "",
         }
 
         try:

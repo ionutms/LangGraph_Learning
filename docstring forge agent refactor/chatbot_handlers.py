@@ -2,6 +2,7 @@ from chatbot_tools import (
     continue_prompt_tool,
     find_python_files_tool,
     model_selection_tool,
+    select_file_tool,
     user_input_tool,
 )
 from langchain.chat_models import init_chat_model
@@ -12,7 +13,7 @@ from langchain_core.prompts import ChatPromptTemplate
 class ChatbotHandlers:
     """Handlers for ChatbotApp workflow steps.
 
-    Manages input processing, chat responses.
+    Manages file selection, input processing, and chat responses.
 
     Attributes:
         llm: Initialized language model.
@@ -32,19 +33,6 @@ class ChatbotHandlers:
         self.chat_prompt = None
         self.available_models = available_models
         self.selected_model = ""
-
-    def initialize_llm(self, model: str):
-        """Initialize LLM with selected model.
-
-        Args:
-            model: LLM model identifier to initialize.
-        """
-        self.llm = init_chat_model(model, temperature=0.0, max_tokens=4000)
-        self.selected_model = model
-        self.chat_prompt = ChatPromptTemplate.from_messages([
-            ("system", self.chat_prompt_template),
-            ("user", "User message: {user_input}"),
-        ])
 
     def find_files(self, state: dict) -> dict:
         """Find Python files in the current directory.
@@ -70,11 +58,6 @@ class ChatbotHandlers:
             state["python_files"] = python_files
 
             if python_files:
-                print("\n📁 Found Python files:")
-                print("-" * 50)
-                for i, file_path in enumerate(python_files, 1):
-                    print(f"{i:2d}. {file_path}")
-                print("-" * 50)
                 state["messages"].append(
                     AIMessage(
                         content=f"Found {len(python_files)} Python files"
@@ -92,6 +75,58 @@ class ChatbotHandlers:
             state["error"] = f"Error finding files: {str(e)}"
             state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
             return state
+
+    def select_file(self, state: dict) -> dict:
+        """Select a Python file from the list of found files.
+
+        Args:
+            state: Agent state with list of Python files.
+
+        Returns:
+            dict: Updated state with selected file or error.
+        """
+        try:
+            if state.get("error"):
+                return state
+
+            result = select_file_tool.invoke({
+                "python_files": state["python_files"]
+            })
+
+            if result["error"]:
+                state["error"] = result["error"]
+                state["messages"].append(
+                    AIMessage(
+                        content=f"File Selection Error: {result['error']}"
+                    )
+                )
+                return state
+
+            selected_file = result["selected_file"]
+            state["selected_file"] = selected_file
+            state["messages"].append(
+                AIMessage(content=f"Selected file: {selected_file}")
+            )
+
+            return state
+
+        except Exception as e:
+            state["error"] = f"Error selecting file: {str(e)}"
+            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+            return state
+
+    def initialize_llm(self, model: str):
+        """Initialize LLM with selected model.
+
+        Args:
+            model: LLM model identifier to initialize.
+        """
+        self.llm = init_chat_model(model, temperature=0.0, max_tokens=4000)
+        self.selected_model = model
+        self.chat_prompt = ChatPromptTemplate.from_messages([
+            ("system", self.chat_prompt_template),
+            ("user", "User message: {user_input}"),
+        ])
 
     def select_model(self, state: dict) -> dict:
         """Handle model selection using the model selection tool.
@@ -187,11 +222,11 @@ class ChatbotHandlers:
                     state["response"] = ai_response
 
                     # Display the response
-                    print(f"\n� time.sleep(0.1) Assistant: \n{ai_response}")
+                    print(f"\n🤖 Assistant: \n{ai_response}")
                     print("-" * 50)
 
                     state["messages"].append(
-                        AIMessage(content="Generated玩response successfully")
+                        AIMessage(content="Generated response successfully")
                     )
 
                 except Exception as e:

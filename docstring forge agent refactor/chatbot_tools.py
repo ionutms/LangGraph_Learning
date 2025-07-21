@@ -168,3 +168,74 @@ def find_python_files_tool(directory: str) -> Dict[str, Any]:
             "python_files": [],
             "error": f"Error finding Python files: {str(e)}",
         }
+
+
+@tool
+def select_file_tool(python_files: List[str]) -> Dict[str, Any]:
+    """Tool for selecting a Python file from a list of files.
+
+    Args:
+        python_files: List of Python file paths.
+
+    Returns:
+        Dict: Contains 'selected_file' and 'error'.
+    """
+    try:
+        if not python_files:
+            return {
+                "selected_file": "",
+                "error": "No Python files available for selection",
+            }
+
+        print("\n📁 Python files:")
+        print("-" * 50)
+        for i, file_path in enumerate(python_files, 1):
+            try:
+                print(f"{i:2d}. {Path(file_path).relative_to(Path.cwd())}")
+            except ValueError:
+                print(f"{i:2d}. {file_path}")
+        print("-" * 50)
+
+        while True:
+            file_input = (
+                input(
+                    f"\nSelect file number (1-{len(python_files)}) "
+                    "or q to quit: "
+                )
+                .strip()
+                .lower()
+            )
+
+            if file_input == "q":
+                return {
+                    "selected_file": "",
+                    "error": "File selection cancelled by user",
+                }
+
+            try:
+                file_index = int(file_input) - 1
+                if 0 <= file_index < len(python_files):
+                    selected_file = python_files[file_index]
+                    try:
+                        rel_path = Path(selected_file).relative_to(Path.cwd())
+                        print(f"\n📁 Selected file: {rel_path}")
+                    except ValueError:
+                        print(f"\n📁 Selected file: {selected_file}")
+                    return {
+                        "selected_file": selected_file,
+                        "error": "",
+                    }
+                print(f"❌ Invalid file number. Use 1-{len(python_files)}.")
+            except ValueError:
+                print("❌ Please enter a valid number.")
+
+    except KeyboardInterrupt:
+        return {
+            "selected_file": "",
+            "error": "File selection cancelled by user",
+        }
+    except Exception as e:
+        return {
+            "selected_file": "",
+            "error": f"Error selecting file: {str(e)}",
+        }
