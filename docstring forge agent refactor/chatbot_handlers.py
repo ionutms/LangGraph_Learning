@@ -35,25 +35,6 @@ class ChatbotHandlers:
         self.llm = None
         self.chat_prompt_template = chat_prompt_template
         self.chat_prompt = None
-        self.doc_prompt_template = """
-You are an expert Python docstring generator.
-- Improve/add docstrings in code, using Google style, no examples.
-- Max 79 chars per line.
-- Remove trailing whitespace from docstrings.
-- Add docstrings to undocumented functions/classes.
-- Do not modify non-docstring code.
-
-**Input**:
-- Docstrings: {docstrings_info}
-- Code:
-```python
-{original_code}
-```
-
-**Output**:
-- Updated Python code with new/improved docstrings.
-- Use single ```python block.
-"""
         self.doc_prompt = None
         self.available_models = available_models
         self.selected_model = ""
@@ -188,7 +169,7 @@ You are an expert Python docstring generator.
             ("user", "User message: {user_input}"),
         ])
         self.doc_prompt = ChatPromptTemplate.from_messages([
-            ("system", self.doc_prompt_template),
+            ("system", self.chat_prompt_template),
             (
                 "user",
                 "{docstrings_info}\n\nCode:\n```python\n{original_code}\n```",
