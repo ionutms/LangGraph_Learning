@@ -119,29 +119,18 @@ class ChatbotApp:
         workflow.add_edge(START, "find_files")
         workflow.add_edge("find_files", "select_file")
         workflow.add_edge("select_file", "select_action")
-        workflow.add_edge("select_action", "select_model")
-        workflow.add_edge("select_model", "load")
+        workflow.add_edge("select_action", "load")
         workflow.add_edge("load", "analyze")
         workflow.add_edge("analyze", "process")
         workflow.add_conditional_edges(
             "process",
             self.handler.should_use_llm,
-            {"use_llm": "llm", "skip_llm": "save"},
+            {"use_llm": "select_model", "skip_llm": "save"},
         )
+        workflow.add_edge("select_model", "llm")
         workflow.add_edge("llm", "save")
         workflow.add_edge("save", END)
         return workflow.compile()
-
-    def _should_continue(self, state: dict) -> str:
-        """Check if chatting should continue.
-
-        Args:
-            state: Agent state with continue flag.
-
-        Returns:
-            str: 'continue' or 'end'.
-        """
-        return "continue" if state.get("continue_chatting", False) else "end"
 
     def run_interactive_mode(self):
         """Run the chatbot in interactive mode."""

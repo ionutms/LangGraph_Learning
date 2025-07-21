@@ -186,8 +186,6 @@ class ChatbotHandlers:
             dict: State with selected model.
         """
         try:
-            if state.get("action") != "update":
-                return state
             result = model_selection_tool.invoke({
                 "models": self.available_models,
                 "current": state.get("selected_model", ""),
@@ -310,12 +308,6 @@ class ChatbotHandlers:
                     )
                 return state
             elif action == "update":
-                if not self.llm or not self.doc_prompt:
-                    state["error"] = "LLM not initialized"
-                    state["messages"].append(
-                        AIMessage(content="Error: LLM not initialized")
-                    )
-                    return state
                 info = "\n".join([
                     f"- {d['type']} '{d['name']}' (line {d['lineno']}): "
                     f"{d['docstring'][:50]}..."
@@ -323,11 +315,14 @@ class ChatbotHandlers:
                     else "None"
                     for d in state["docstring_info"]
                 ])
-                prompt = self.doc_prompt.invoke({
-                    "docstrings_info": info,
-                    "original_code": state["original_code"],
-                }).to_messages()
-                state["messages"] = prompt
+                # Prepare prompt without requiring LLM initialization
+                state["messages"] = [
+                    ("system", self.chat_prompt_template),
+                    (
+                        "user",
+                        f"{info}\n\nCode:\n```python\n{state['original_code']}\n```",
+                    ),
+                ]
                 state["messages"].append(
                     AIMessage(
                         content="Prepared LLM prompt for docstring update"
