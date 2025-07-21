@@ -8,7 +8,7 @@ from typing_extensions import TypedDict
 
 load_dotenv()
 
-# Available LLM models for selection
+# Available LLM models
 LLM_MODELS = [
     "groq:llama-3.3-70b-versatile",
     "groq:deepseek-r1-distill-llama-70b",
@@ -16,13 +16,34 @@ LLM_MODELS = [
     "groq:moonshotai/kimi-k2-instruct",
 ]
 
-# Global LLM instructions for chatbot
+# LLM instructions for chatbot
 LLM_INSTRUCTIONS = """
-You are a helpful AI assistant chatbot.
-Provide clear, concise, and meaningful responses to user queries.
-Be conversational and friendly in your responses.
+You are an expert Python docstring generator.
+- Improve or add docstrings in the provided Python code, following Google
+docstring conventions without the example section.
+- Keep maximum 79 chars per line.
+- Remove trailing whitespaces from docstrings.
+- Add docstrings to all functions and classes that lack them.
+- Do not modify other parts of the code or refactor it.
 
-User message: {user_input}
+Requirements:
+1. Clear, concise descriptions.
+2. Document all parameters and return values.
+3. Use consistent formatting.
+4. Follow Google docstring style without examples.
+5. Ensure docstrings are added for undocumented functions/classes.
+
+Input Format:
+- Current docstrings found: {docstrings_info}
+- Original code:
+```python
+{original_code}
+```
+
+Output Format:
+- Return the complete updated Python code with improved/added docstrings.
+- Wrap the output in a single ```python code block.
+- Do not include other code blocks or markers.
 """
 
 
@@ -30,16 +51,21 @@ class AgentState(TypedDict):
     """State for chatbot workflow.
 
     Attributes:
-        user_input: User's input message.
-        messages: List of chat messages for LLM interaction.
-        error: Error message if processing fails, None otherwise.
-        response: AI assistant's response.
-        selected_model: The selected LLM model.
-        continue_chatting: Whether to continue in interactive mode.
-        user_choice: User's choice for continuing.
-        python_files: List of Python file paths found in directory.
-        selected_file: Selected Python file path.
-        action: Selected action (remove, update, or quit).
+        user_input: User input message.
+        messages: Chat messages for LLM.
+        error: Error message, if any.
+        response: AI assistant response.
+        selected_model: Selected LLM model.
+        continue_chatting: Continue interactive mode.
+        user_choice: User continue choice.
+        python_files: List of Python file paths.
+        selected_file: Selected file path.
+        action: Action (remove, update, quit).
+        original_code: Original code content.
+        processed_code: Processed code content.
+        docstring_info: Docstring details list.
+        output_dir: Output directory for files.
+        saved_file: Saved processed file path.
     """
 
     user_input: str
@@ -52,72 +78,76 @@ class AgentState(TypedDict):
     python_files: list[str]
     selected_file: str
     action: Optional[str]
+    original_code: str
+    processed_code: str
+    docstring_info: list[dict]
+    output_dir: str
+    saved_file: str
 
 
 class ChatbotApp:
-    """Simple chatbot application using LangGraph.
+    """Chatbot app with docstring processing using LangGraph.
 
-    Manages a workflow for finding and selecting Python files,
-    selecting an action, and chatting with an AI assistant.
+    Manages file selection, action selection, and docstring processing.
 
     Attributes:
         graph: Compiled LangGraph workflow.
-        handler: Instance of ChatbotHandlers.
+        handler: ChatbotHandlers instance.
     """
 
     def __init__(self):
-        """Initialize the ChatbotApp."""
+        """Initialize ChatbotApp."""
         self.handler = ChatbotHandlers(LLM_INSTRUCTIONS, LLM_MODELS)
         self.graph = self.create_workflow()
 
     def create_workflow(self) -> StateGraph:
-        """Create and compile the LangGraph workflow for chatbot.
+        """Create LangGraph workflow for chatbot and docstring processing.
 
         Returns:
-            StateGraph: Compiled workflow for chatting.
+            StateGraph: Compiled workflow.
         """
         workflow = StateGraph(AgentState)
-
-        # Add nodes
         workflow.add_node("find_files", self.handler.find_files)
         workflow.add_node("select_file", self.handler.select_file)
         workflow.add_node("select_action", self.handler.select_action)
         workflow.add_node("select_model", self.handler.select_model)
-        workflow.add_node("ask_continue", self.handler.ask_continue)
-
-        # Define edges
+        workflow.add_node("load", self.handler.load_file)
+        workflow.add_node("analyze", self.handler.analyze_docstrings)
+        workflow.add_node("process", self.handler.process_docstrings)
+        workflow.add_node("llm", self.handler.llm_process)
+        workflow.add_node("save", self.handler.save_result)
         workflow.add_edge(START, "find_files")
         workflow.add_edge("find_files", "select_file")
         workflow.add_edge("select_file", "select_action")
         workflow.add_edge("select_action", "select_model")
-        workflow.add_edge("select_model", "ask_continue")
-
-        # Conditional edge for continuing
+        workflow.add_edge("select_model", "load")
+        workflow.add_edge("load", "analyze")
+        workflow.add_edge("analyze", "process")
         workflow.add_conditional_edges(
-            "ask_continue",
-            self._should_continue,
-            {"continue": "find_files", "end": END},
+            "process",
+            self.handler.should_use_llm,
+            {"use_llm": "llm", "skip_llm": "save"},
         )
-
+        workflow.add_edge("llm", "save")
+        workflow.add_edge("save", END)
         return workflow.compile()
 
     def _should_continue(self, state: dict) -> str:
-        """Determine whether to continue chatting or end.
+        """Check if chatting should continue.
 
         Args:
-            state: Agent state with continue_chatting flag.
+            state: Agent state with continue flag.
 
         Returns:
-            str: "continue" or "end" based on user choice.
+            str: 'continue' or 'end'.
         """
         return "continue" if state.get("continue_chatting", False) else "end"
 
     def run_interactive_mode(self):
-        """Run the chatbot app."""
-        print("🤖 Simple Chatbot")
+        """Run the chatbot in interactive mode."""
+        print("🤖 Chatbot with Docstring Processing")
         print("=" * 60)
-
-        initial_state = {
+        state = {
             "user_input": "",
             "messages": [],
             "error": None,
@@ -128,15 +158,19 @@ class ChatbotApp:
             "python_files": [],
             "selected_file": "",
             "action": None,
+            "original_code": "",
+            "processed_code": "",
+            "docstring_info": [],
+            "output_dir": "",
+            "saved_file": "",
         }
-
         try:
-            self.graph.invoke(initial_state)
+            self.graph.invoke(state)
             print("👋 Goodbye!")
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")
         except Exception as e:
-            print(f"❌ Error: {str(e)}")
+            print(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
@@ -144,5 +178,4 @@ if __name__ == "__main__":
     print("Graph structure:")
     print(app.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60 + "\n")
-
     app.run_interactive_mode()
