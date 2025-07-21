@@ -12,12 +12,13 @@ from langchain_core.prompts import ChatPromptTemplate
 class ChatbotHandlers:
     """Handlers for ChatbotApp workflow steps.
 
-    Manages file selection, input processing, and chat responses.
+    Manages file selection, action selection, input processing,
+    and chat responses.
 
     Attributes:
         llm: Initialized language model.
         chat_prompt: Prompt template for LLM.
-        available_models: List of available LLM models.
+        available_models: List of available LLM model identifiers.
     """
 
     def __init__(self, chat_prompt_template: str, available_models: list):
@@ -114,6 +115,55 @@ class ChatbotHandlers:
             state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
             return state
 
+    def select_action(self, state: dict) -> dict:
+        """Prompt user to select an action for the selected Python file.
+
+        Args:
+            state: Agent state with selected file.
+
+        Returns:
+            dict: Updated state with selected action or error.
+        """
+        try:
+            if state.get("error") or not state.get("selected_file"):
+                return state
+
+            actions = {"r": "remove", "u": "update", "q": "quit"}
+            print("\n🔧 Actions:")
+            print("  r - Remove docstrings/comments")
+            print("  u - Update docstrings with LLM")
+            print("  q - Quit")
+
+            while True:
+                action_input = input("\nSelect action: ").lower().strip()
+                if action_input not in actions:
+                    print("❌ Invalid action. Use r, u, or q.")
+                    continue
+                selected_action = actions[action_input]
+                if selected_action == "quit":
+                    state["continue_chatting"] = False
+                    state["messages"].append(
+                        AIMessage(content="User chose to quit")
+                    )
+                    return state
+                state["action"] = selected_action
+                state["messages"].append(
+                    AIMessage(content=f"Selected action: {selected_action}")
+                )
+                return state
+
+        except KeyboardInterrupt:
+            state["error"] = "Action selection cancelled by user"
+            state["continue_chatting"] = False
+            state["messages"].append(
+                AIMessage(content="Action selection cancelled by user")
+            )
+            return state
+        except Exception as e:
+            state["error"] = f"Error selecting action: {str(e)}"
+            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+            return state
+
     def initialize_llm(self, model: str):
         """Initialize LLM with selected model.
 
@@ -137,6 +187,9 @@ class ChatbotHandlers:
             dict: Updated state with selected model.
         """
         try:
+            if state.get("action") != "update":
+                return state  # Skip model selection if action is not 'update'
+
             result = model_selection_tool.invoke({
                 "available_models": self.available_models,
                 "current_model": state.get("selected_model", ""),
@@ -146,7 +199,7 @@ class ChatbotHandlers:
                 state["error"] = result["error"]
                 state["messages"].append(
                     AIMessage(
-                        content=f"Model Selection Error: {result['error']}"
+                        content=f"Model Selection Error: {state['error']}"
                     )
                 )
                 return state
@@ -208,6 +261,7 @@ class ChatbotHandlers:
                 state["user_input"] = ""
                 state["response"] = ""
                 state["error"] = None
+                state["action"] = None  # Reset action for next iteration
 
             return state
 
