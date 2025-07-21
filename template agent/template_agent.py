@@ -43,6 +43,8 @@ class AgentState(TypedDict):
         error: Error message if processing fails, None otherwise.
         result: Final result of the processing.
         selected_model: The selected LLM model for processing.
+        continue_processing: Whether to continue in interactive mode.
+        user_choice: User's choice for continuing or model selection.
     """
 
     input_data: str
@@ -51,13 +53,15 @@ class AgentState(TypedDict):
     error: Optional[str]
     result: str
     selected_model: str
+    continue_processing: bool
+    user_choice: str
 
 
 class TemplateApp:
     """Orchestrates the template processing workflow using LangGraph.
 
-    Manages a simple workflow for processing input data with a single node
-    and helper class.
+    Manages a workflow for processing input data with interactive
+    capabilities through nodes and handlers.
 
     Attributes:
         llm: Initialized language model for processing.
@@ -76,7 +80,9 @@ class TemplateApp:
         self.llm = None
         self.selected_model = model
         self.template_prompt = LLM_INSTRUCTIONS
-        self.handler = TemplateHandlers(None, self.template_prompt)
+        self.handler = TemplateHandlers(
+            None, self.template_prompt, LLM_MODELS
+        )
         self.graph = self.create_workflow()
 
     def initialize_llm(self, model: str):
@@ -101,126 +107,68 @@ class TemplateApp:
             StateGraph: Compiled workflow for processing input data.
         """
         workflow = StateGraph(AgentState)
+
+        # Add nodes
+        workflow.add_node("select_model", self.handler.select_model)
+        workflow.add_node("get_user_input", self.handler.get_user_input)
         workflow.add_node("process", self.handler.process_input)
-        workflow.add_edge(START, "process")
-        workflow.add_edge("process", END)
+        workflow.add_node("display_results", self.handler.display_results)
+        workflow.add_node("ask_continue", self.handler.ask_continue)
+
+        # Define edges
+        workflow.add_edge(START, "select_model")
+        workflow.add_edge("select_model", "get_user_input")
+        workflow.add_edge("get_user_input", "process")
+        workflow.add_edge("process", "display_results")
+        workflow.add_edge("display_results", "ask_continue")
+
+        # Conditional edge for continuing
+        workflow.add_conditional_edges(
+            "ask_continue",
+            self._should_continue,
+            {"continue": "get_user_input", "end": END},
+        )
+
         return workflow.compile()
 
-    def select_model(self) -> str:
-        """Prompt user to select an LLM model from available options.
-
-        Returns:
-            str: Selected LLM model identifier.
-        """
-        print("\nAvailable LLM Models:")
-        for model_index, model in enumerate(LLM_MODELS, 1):
-            current_indicator = (
-                " (current)" if model == self.selected_model else ""
-            )
-            print(f"{model_index}. {model}{current_indicator}")
-
-        while True:
-            choice = input(
-                f"\nSelect a model (1-{len(LLM_MODELS)}): "
-            ).strip()
-            try:
-                selected_index = int(choice) - 1
-                if 0 <= selected_index < len(LLM_MODELS):
-                    return LLM_MODELS[selected_index]
-                print(f"Select a number between 1 and {len(LLM_MODELS)}.")
-            except ValueError:
-                print("Invalid input.")
-
-    def process_input(self, input_data: str) -> dict:
-        """Process input data.
+    def _should_continue(self, state: dict) -> str:
+        """Determine whether to continue processing or end.
 
         Args:
-            input_data: Data to process.
+            state: Agent state with continue_processing flag.
 
         Returns:
-            dict:
-                Result containing success status, processed data,
-                and messages.
+            str: "continue" or "end" based on user choice.
         """
-        print("🔧 Processing input data")
-        print(f"📊 Input length: {len(input_data)} characters")
-        print("-" * 50)
+        return (
+            "continue" if state.get("continue_processing", False) else "end"
+        )
+
+    def run_interactive_mode(self):
+        """Run the template app in interactive mode using the workflow."""
+        print("🚀 Template App - Interactive Mode")
+        print("=" * 60)
 
         initial_state = {
-            "input_data": input_data,
+            "input_data": "",
             "processed_data": "",
             "messages": [],
             "error": None,
             "result": "",
-            "selected_model": self.selected_model,
+            "selected_model": self.selected_model or "",
+            "continue_processing": True,
+            "user_choice": "",
         }
 
         try:
-            result = self.graph.invoke(initial_state)
-            success = not bool(result.get("error"))
-            if success:
-                print("✅ Successfully processed input")
-            else:
-                print(f"❌ Error: {result['error']}")
-            print("✨ Done!")
-            return {
-                "success": success,
-                "processed_data": result["processed_data"],
-                "result": result["result"],
-                "messages": result["messages"],
-                "error": result["error"],
-            }
+            # Set the handler's app reference for LLM initialization
+            self.handler.app = self
+            self.graph.invoke(initial_state)
+            print("👋 Goodbye!")
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
         except Exception as e:
             print(f"❌ Error: {str(e)}")
-            return {
-                "success": False,
-                "processed_data": "",
-                "result": "",
-                "messages": [],
-                "error": str(e),
-            }
-
-    def interactive_mode(self):
-        """Run the template app in interactive mode."""
-        print("🚀 Template App - Interactive Mode")
-        print("=" * 60)
-
-        # Select model first
-        selected_model = self.select_model()
-        self.initialize_llm(selected_model)
-        print(f"\n🤖 Selected LLM Model: {selected_model}")
-        print("=" * 60)
-
-        while True:
-            try:
-                # Get input data from user
-                print("\n📝 Enter your input:")
-                input_data = input("> ").strip()
-
-                if not input_data:
-                    print("❌ Please provide some input.")
-                    continue
-
-                # Process the input
-                result = self.process_input(input_data)
-
-                if result["success"]:
-                    print("\n📊 Result:")
-                    print(f"{result['result']}")
-
-                # Ask if user wants to continue
-                choice = (
-                    input("\n🔄 Process more input? (y/n): ").lower().strip()
-                )
-                if choice not in ["y", "yes"]:
-                    print("👋 Goodbye!")
-                    return
-
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                return
-            except Exception as e:
-                print(f"❌ Error: {str(e)}")
 
 
 if __name__ == "__main__":
@@ -229,4 +177,4 @@ if __name__ == "__main__":
     print(app.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60 + "\n")
 
-    app.interactive_mode()
+    app.run_interactive_mode()
