@@ -80,17 +80,13 @@ class ChatbotApp:
         workflow.add_node("find_files", self.handler.find_files)
         workflow.add_node("select_file", self.handler.select_file)
         workflow.add_node("select_model", self.handler.select_model)
-        workflow.add_node("get_user_input", self.handler.get_user_input)
-        workflow.add_node("chat_response", self.handler.chat_response)
         workflow.add_node("ask_continue", self.handler.ask_continue)
 
         # Define edges
         workflow.add_edge(START, "find_files")
         workflow.add_edge("find_files", "select_file")
         workflow.add_edge("select_file", "select_model")
-        workflow.add_edge("select_model", "get_user_input")
-        workflow.add_edge("get_user_input", "chat_response")
-        workflow.add_edge("chat_response", "ask_continue")
+        workflow.add_edge("select_model", "ask_continue")
 
         # Conditional edge for continuing
         workflow.add_conditional_edges(

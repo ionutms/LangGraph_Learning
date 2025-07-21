@@ -3,7 +3,6 @@ from chatbot_tools import (
     find_python_files_tool,
     model_selection_tool,
     select_file_tool,
-    user_input_tool,
 )
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
@@ -166,93 +165,6 @@ class ChatbotHandlers:
         except Exception as e:
             state["error"] = f"Error selecting model: {str(e)}"
             state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            return state
-
-    def get_user_input(self, state: dict) -> dict:
-        """Handle getting user input using the user input tool.
-
-        Args:
-            state: Agent state.
-
-        Returns:
-            dict: Updated state with user input.
-        """
-        try:
-            result = user_input_tool.invoke({})
-
-            if result["error"]:
-                state["error"] = result["error"]
-                state["messages"].append(
-                    AIMessage(content=f"Input Error: {result['error']}")
-                )
-                return state
-
-            user_input = result["input_data"]
-            state["user_input"] = user_input
-
-            state["messages"].append(
-                AIMessage(content=f"Received: {user_input}")
-            )
-
-            return state
-
-        except Exception as e:
-            state["error"] = f"Error getting user input: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            return state
-
-    def chat_response(self, state: dict) -> dict:
-        """Generate and display chat response using LLM.
-
-        Args:
-            state: Agent state with user input.
-
-        Returns:
-            dict: Updated state with AI response.
-        """
-        try:
-            if self.llm and self.chat_prompt:
-                try:
-                    prompt = self.chat_prompt.invoke({
-                        "user_input": state["user_input"],
-                    }).to_messages()
-
-                    response = self.llm.invoke(prompt)
-                    ai_response = response.content.strip()
-                    state["response"] = ai_response
-
-                    # Display the response
-                    print(f"\n🤖 Assistant: \n{ai_response}")
-                    print("-" * 50)
-
-                    state["messages"].append(
-                        AIMessage(content="Generated response successfully")
-                    )
-
-                except Exception as e:
-                    error_msg = f"LLM error: {str(e)}"
-                    state["error"] = error_msg
-                    state["response"] = "Sorry, I encountered an error."
-                    print(f"❌ {error_msg}")
-                    state["messages"].append(
-                        AIMessage(content=f"LLM Error: {str(e)}")
-                    )
-            else:
-                error_msg = "No LLM available"
-                state["error"] = error_msg
-                state["response"] = "Sorry, no AI model is available."
-                print(f"❌ {error_msg}")
-                state["messages"].append(
-                    AIMessage(content="No LLM available")
-                )
-
-            return state
-
-        except Exception as e:
-            state["error"] = f"Error generating response: {str(e)}"
-            state["response"] = "Sorry, I encountered an error."
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            print(f"❌ Error: {str(e)}")
             return state
 
     def ask_continue(self, state: dict) -> dict:

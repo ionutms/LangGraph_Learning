@@ -63,40 +63,6 @@ def model_selection_tool(
 
 
 @tool
-def user_input_tool() -> Dict[str, Any]:
-    """Tool for getting user input for chat.
-
-    Returns:
-        Dict: Contains 'input_data' and 'error'.
-    """
-    try:
-        print("\n💬 You:")
-        user_message = input("> ").strip()
-
-        if not user_message:
-            return {
-                "input_data": "",
-                "error": "Please enter a message.",
-            }
-
-        return {
-            "input_data": user_message,
-            "error": "",
-        }
-
-    except KeyboardInterrupt:
-        return {
-            "input_data": "",
-            "error": "Input cancelled by user",
-        }
-    except Exception as e:
-        return {
-            "input_data": "",
-            "error": f"Error getting user input: {str(e)}",
-        }
-
-
-@tool
 def continue_prompt_tool() -> Dict[str, Any]:
     """Tool for asking user whether to continue chatting.
 
