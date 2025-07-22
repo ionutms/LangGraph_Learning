@@ -1,78 +1,206 @@
-import sys
-from pathlib import Path
-from typing import List
-
 from docstring_forge_tools import (
     extract_docstrings_tool,
+    find_python_files_tool,
     load_file_tool,
+    model_selection_tool,
     remove_docstrings_and_comments_tool,
+    save_file_tool,
+    select_file_tool,
 )
+from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage
 
 
 class DocstringForgeHandlers:
-    """Handlers for DocstringForge workflow steps using tools.
+    """Handle ChatbotApp workflow steps for file and docstring processing.
 
-    Manages file operations, docstring analysis, processing, and saving for
-    the docstring forge workflow.
+    Manages file selection, action selection, docstring processing,
+    and LLM updates.
 
     Attributes:
-        llm: Initialized language model for docstring updates.
-        sv_prompt: Prompt template for LLM docstring generation.
+        llm: Language model for chat and docstring updates.
+        available_models: List of LLM model identifiers.
     """
 
-    def __init__(self, llm, sv_prompt: str):
-        """Initialize the handlers with LLM and prompt.
+    def __init__(self, chat_prompt_template: str, available_models: list):
+        """Initialize handlers with prompt and models.
 
         Args:
-            llm: Initialized language model (can be None initially).
-            sv_prompt: Prompt template string for LLM docstring generation.
+            chat_prompt_template: Template for LLM chat responses.
+            available_models: List of LLM model identifiers.
         """
-        self.llm = llm
-        self.sv_prompt_template = sv_prompt
-        self.sv_prompt = None
+        self.llm = None
+        self.chat_prompt_template = chat_prompt_template
+        self.available_models = available_models
 
-    def load_file(self, state: dict) -> dict:
-        """Load and validate the Python file using load_file_tool.
+    def find_files(self, state: dict) -> dict:
+        result = find_python_files_tool.invoke({"directory": "."})
+        if result["error"]:
+            state["error"] = result["error"]
+            state["messages"].append(
+                AIMessage(content=f"Error finding files: {result['error']}")
+            )
+            return state
+        state["python_files"] = result["python_files"]
+        if state["python_files"]:
+            state["messages"].append(
+                AIMessage(content=f"{len(state['python_files'])} files found")
+            )
+        else:
+            print("\n📁 No Python files found.")
+            state["messages"].append(
+                AIMessage(content="No Python files found")
+            )
+        return state
+
+    def select_file(self, state: dict) -> dict:
+        """Select a Python file from found files.
 
         Args:
-            state: Agent state with file path.
+            state: Agent state with Python files.
 
         Returns:
-            dict: Updated state with original and processed code, or error.
+            dict: State with selected file or error.
         """
-        try:
-            result = load_file_tool.invoke({"file_path": state["file_path"]})
-            if result["error"]:
-                state["error"] = result["error"]
-                state["messages"].append(
-                    AIMessage(content=f"Error: {result['error']}")
-                )
-            else:
-                state["original_code"] = result["file_content"]
-                state["processed_code"] = result["file_content"]
-                state["messages"].append(
-                    AIMessage(content=f"Loaded file: {state['file_path']}")
-                )
+        result = select_file_tool.invoke({
+            "python_files": state["python_files"]
+        })
+        if result["error"]:
+            state["error"] = result["error"]
+            state["messages"].append(
+                AIMessage(content=f"File selection error: {result['error']}")
+            )
             return state
-        except Exception as e:
-            state["error"] = f"Error invoking load_file_tool: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+        state["selected_file"] = result["selected_file"]
+        state["messages"].append(
+            AIMessage(content=f"Selected file: {result['selected_file']}")
+        )
+        return state
+
+    def select_action(self, state: dict) -> dict:
+        """Prompt user to select an action for the file.
+
+        Args:
+            state: Agent state with selected file.
+
+        Returns:
+            dict: State with selected action or error.
+        """
+        actions = {"r": "remove", "u": "update"}
+
+        print("\n🔧 Actions:")
+        print("  r - Remove docstrings/comments")
+        print("  u - Update docstrings with LLM")
+
+        while True:
+            user_input = input("\nSelect action: ").lower().strip()
+            if user_input not in actions:
+                print("❌ Invalid action. Use r or u.")
+                continue
+            selected_action = actions[user_input]
+            state["action"] = selected_action
+            state["output_dir"] = "processed_files"
+            state["messages"].append(
+                AIMessage(content=f"Selected action: {selected_action}")
+            )
             return state
 
+    def initialize_llm(self, model: str):
+        """Initialize LLM with selected model.
+
+        Args:
+            model: LLM model identifier.
+        """
+        self.llm = init_chat_model(model)
+
+    def select_model(self, state: dict) -> dict:
+        """Handle model selection for LLM updates.
+
+        Args:
+            state: Agent state.
+
+        Returns:
+            dict: State with selected model.
+        """
+        result = model_selection_tool.invoke({
+            "models": self.available_models,
+            "current": state.get("selected_model", ""),
+        })
+        if result["error"]:
+            state["error"] = result["error"]
+            state["messages"].append(
+                AIMessage(content=f"Model selection error: {result['error']}")
+            )
+            return state
+        state["selected_model"] = result["selected_model"]
+        state["messages"].append(
+            AIMessage(content=f"Selected model: {result['selected_model']}")
+        )
+        self.initialize_llm(result["selected_model"])
+        return state
+
+    def load_file(self, state: dict) -> dict:
+        """Load the selected Python file.
+
+        Args:
+            state: Agent state with selected file.
+
+        Returns:
+            dict: State with loaded code or error.
+        """
+        result = load_file_tool.invoke({"file_path": state["selected_file"]})
+        if result["error"]:
+            state["error"] = result["error"]
+            state["messages"].append(
+                AIMessage(content=f"Error: {result['error']}")
+            )
+        else:
+            state["original_code"] = result["file_content"]
+            state["processed_code"] = result["file_content"]
+            state["messages"].append(
+                AIMessage(content=f"Loaded file: {state['selected_file']}")
+            )
+        return state
+
     def analyze_docstrings(self, state: dict) -> dict:
-        """Analyze and extract docstring info using extract_docstrings_tool.
+        """Extract docstring info from code.
 
         Args:
             state: Agent state with original code.
 
         Returns:
-            dict: Updated state with docstring info or error.
+            dict: State with docstring info or error.
         """
-        if state.get("error"):
-            return state
-        try:
-            result = extract_docstrings_tool.invoke({
+        result = extract_docstrings_tool.invoke({
+            "code": state["original_code"]
+        })
+        if result["error"]:
+            state["error"] = result["error"]
+            state["messages"].append(
+                AIMessage(content=f"Error: {result['error']}")
+            )
+        else:
+            state["docstring_info"] = result["docstring_info"]
+            state["messages"].append(
+                AIMessage(
+                    content=f"Found {len(result['docstring_info'])} "
+                    "docstrings"
+                )
+            )
+        return state
+
+    def process_docstrings(self, state: dict) -> dict:
+        """Process docstrings based on action.
+
+        Args:
+            state: Agent state with action and code.
+
+        Returns:
+            dict: State with processed code or LLM prompt.
+        """
+        action = state["action"]
+        if action == "remove":
+            result = remove_docstrings_and_comments_tool.invoke({
                 "code": state["original_code"]
             })
             if result["error"]:
@@ -81,261 +209,145 @@ class DocstringForgeHandlers:
                     AIMessage(content=f"Error: {result['error']}")
                 )
             else:
-                state["docstring_info"] = result["docstring_info"]
+                state["processed_code"] = result["processed_code"]
                 state["messages"].append(
-                    AIMessage(
-                        content=f"Found {len(result['docstring_info'])} "
-                        "docstrings"
-                    )
+                    AIMessage(content="Removed docstrings and comments")
                 )
             return state
-        except Exception as e:
-            state["error"] = f"Error analyzing docstrings: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
+        elif action == "update":
+            info = "\n".join([
+                f"- {d['type']} '{d['name']}' (line {d['lineno']}): "
+                f"{d['docstring'][:50]}..."
+                if d["docstring"]
+                else "None"
+                for d in state["docstring_info"]
+            ])
+            state["messages"] = [
+                ("system", self.chat_prompt_template),
+                (
+                    "user",
+                    f"{info}\n\nCode:\n```python\n{state['original_code']}\n```",
+                ),
+            ]
+            state["messages"].append(
+                AIMessage(content="Prepared LLM prompt for docstring update")
+            )
             return state
-
-    def process_docstrings(self, state: dict) -> dict:
-        """Process docstrings and comments based on action using tools.
-
-        Args:
-            state: Agent state with action and original code.
-
-        Returns:
-            dict: Updated state with processed code or LLM messages, or error.
-        """
-        if state.get("error"):
-            return state
-        action = state["action"]
-        try:
-            if action == "remove":
-                result = remove_docstrings_and_comments_tool.invoke({
-                    "code": state["original_code"]
-                })
-                if result["error"]:
-                    state["error"] = result["error"]
-                    state["messages"].append(
-                        AIMessage(content=f"Error: {result['error']}")
-                    )
-                else:
-                    state["processed_code"] = result["processed_code"]
-                    state["messages"].append(
-                        AIMessage(content="Removed docstrings and comments")
-                    )
-                return state
-            elif action == "update":
-                if not self.llm or not self.sv_prompt:
-                    state["error"] = "LLM not initialized for update action"
-                    state["messages"].append(
-                        AIMessage(content="Error: LLM not initialized")
-                    )
-                    return state
-
-                docstrings_info = "\n".join([
-                    f"- {info['type']} '{info['name']}' "
-                    f"(line {info['lineno']}): "
-                    f"{info['docstring'][:50]}..."
-                    if info["docstring"]
-                    else "None"
-                    for info in state["docstring_info"]
-                ])
-                prompt = self.sv_prompt.invoke({
-                    "docstrings_info": docstrings_info,
-                    "original_code": state["original_code"],
-                }).to_messages()
-                state["messages"] = prompt
-                state["messages"].append(
-                    AIMessage(
-                        content="Prepared LLM prompt for docstring update"
-                    )
-                )
-                return state
-            else:
-                state["error"] = f"Unknown action: {action}"
-                state["messages"].append(
-                    AIMessage(content=f"Error: Unknown action {action}")
-                )
-                return state
-        except Exception as e:
-            state["error"] = f"Error processing docstrings: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            return state
+        state["error"] = f"Unknown action: {action}"
+        state["messages"].append(
+            AIMessage(content=f"Error: Unknown action {action}")
+        )
+        return state
 
     def llm_process(self, state: dict) -> dict:
-        """Use LLM to update docstrings.
+        """Update docstrings using LLM.
 
         Args:
-            state: Agent state with messages for LLM.
+            state: Agent state with LLM prompt.
 
         Returns:
-            dict: Updated state with processed code and messages, or error.
+            dict: State with updated code or error.
         """
-        if state.get("error") or not state.get("messages"):
-            return state
-
         if not self.llm:
-            state["error"] = "LLM not initialized for processing"
+            state["error"] = "LLM not initialized"
             state["messages"].append(
                 AIMessage(content="Error: LLM not initialized")
             )
             return state
-
-        try:
-            response = self.llm.invoke(state["messages"])
-            content = response.content
-            if "```python" in content:
-                start = content.find("```python") + 9
-                end = content.find("```", start)
-                processed_code = (
-                    content[start:end].strip()
-                    if end != -1
-                    else content[start:].strip()
-                )
-            else:
-                processed_code = content.strip()
-            state["processed_code"] = processed_code
-            state["messages"].append(
-                AIMessage(content="Updated docstrings with LLM")
+        resp = self.llm.invoke(state["messages"])
+        content = resp.content
+        if "```python" in content:
+            start = content.find("```python") + 9
+            end = content.find("```", start)
+            code = (
+                content[start:end].strip()
+                if end != -1
+                else content[start:].strip()
             )
-            return state
-        except Exception as e:
-            state["error"] = f"Error in LLM processing: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            return state
+        else:
+            code = content.strip()
+        state["processed_code"] = code
+        state["messages"].append(
+            AIMessage(content="Updated docstrings with LLM")
+        )
+        return state
 
     def save_result(self, state: dict) -> dict:
-        """Save the processed code to the output directory.
+        """Save processed code to output directory.
 
         Args:
-            state: Agent state with processed code and output directory.
+            state: Agent state with processed code.
 
         Returns:
-            dict: Updated state with saved file path or error.
+            dict: State with saved file path or error.
         """
-        if state.get("error"):
-            return state
-        try:
-            output_dir = Path(state["output_dir"])
-            output_dir.mkdir(parents=True, exist_ok=True)
-            original_path = Path(state["file_path"])
-            output_path = output_dir / original_path.name
-            content = state["processed_code"]
-            if not content.endswith("\n"):
-                content += "\n"
-            with open(output_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            state["saved_file"] = str(output_path)
+        result = save_file_tool.invoke({
+            "content": state["processed_code"],
+            "output_dir": state["output_dir"],
+            "orig_path": state["selected_file"],
+        })
+        if result["error"]:
+            state["error"] = result["error"]
             state["messages"].append(
-                AIMessage(content=f"Saved processed file to {output_path}")
+                AIMessage(content=f"Error: {result['error']}")
             )
-            return state
-        except Exception as e:
-            state["error"] = f"Error saving file: {str(e)}"
-            state["messages"].append(AIMessage(content=f"Error: {str(e)}"))
-            return state
+        else:
+            state["saved_file"] = result["saved_file"]
+            state["messages"].append(
+                AIMessage(content=f"Saved file to {result['saved_file']}")
+            )
+        return state
 
-    @staticmethod
-    def should_use_llm(state: dict) -> str:
-        """Determine if LLM processing is needed.
+    def check_continue(self, state: dict) -> dict:
+        """Check if user wants to continue processing files.
 
         Args:
-            state: Agent state with action and error status.
+            state: Agent state with iteration count.
 
         Returns:
-            str: Next edge to follow ('use_llm' or 'skip_llm').
+            dict: Updated state with continue flag or end.
         """
-        if state.get("error"):
-            return "skip_llm"
+        if not state.get("continue_chatting", True):
+            return state
+        if state["iteration_count"] >= state["max_iterations"]:
+            print(f"\n🔄 Max iterations ({state['max_iterations']}) reached")
+            state["continue_chatting"] = False
+            return state
+
+        state["iteration_count"] += 1
+        print(
+            f"\n🔄 Iteration {state['iteration_count']} out of "
+            f"{state['max_iterations']}"
+        )
+
+        print("\n🔄 Continue processing another file? (y/n): ", end="")
+        choice = input().strip().lower()
+        if choice in ["n", "no", "q", "quit"]:
+            state["continue_chatting"] = False
+        else:
+            state["error"] = None
+            state["selected_file"] = ""
+            state["action"] = None
+            state["original_code"] = ""
+            state["processed_code"] = ""
+            state["docstring_info"] = []
+            state["saved_file"] = ""
+        return state
+
+    def should_use_llm(self, state: dict) -> str:
+        """Check if LLM processing is needed.
+
+        Args:
+            state: Agent state with action.
+
+        Returns:
+            str: 'use_llm' or 'skip_llm'.
+        """
         return "use_llm" if state["action"] == "update" else "skip_llm"
 
-    @staticmethod
-    def display_files_menu(files: List[Path]) -> None:
-        """Display the list of available Python files.
-
-        Args:
-            files: List of Path objects representing Python files.
-        """
-        print("📁 Python files:")
-        print("-" * 50)
-        for i, file_path in enumerate(files, 1):
-            try:
-                print(f"{i:2d}. {file_path.relative_to(Path.cwd())}")
-            except OSError:
-                print(f"{i:2d}. {file_path}")
-        print("-" * 50)
-
-    @staticmethod
-    def get_output_directory() -> str:
-        """Get the output directory from user or use default.
-
-        Returns:
-            str: Path to the output directory.
-        """
-        return "processed_files"
-
-    @staticmethod
-    def get_user_choice(files: List[Path]) -> tuple[str, Path, str]:
-        """Get user's choice of file, action, and output directory.
-
-        Args:
-            files: List of Path objects representing Python files.
-
-        Returns:
-            tuple: (action, selected_file, output_dir).
-        """
-        actions = {"r": "remove", "u": "update"}
-
-        while True:
-            try:
-                file_input = (
-                    input(
-                        f"\nSelect file number (1-{len(files)}) "
-                        "or q to quit: "
-                    )
-                    .strip()
-                    .lower()
-                )
-
-                if file_input == "q":
-                    print("👋 Goodbye!")
-                    sys.exit(0)
-
-                try:
-                    file_index = int(file_input) - 1
-                    if 0 <= file_index < len(files):
-                        selected_file = files[file_index]
-                        break
-                    print(f"❌ Invalid file number. Use 1-{len(files)}.")
-                except ValueError:
-                    print("❌ Please enter a valid number.")
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                sys.exit(0)
-
-        try:
-            rel_path = selected_file.relative_to(Path.cwd())
-            print(f"\n📁 Selected file: {rel_path}")
-        except ValueError:
-            print(f"\n📁 Selected file: {selected_file}")
-        print("\n🔧 Actions:")
-        print("  r - Remove docstrings/comments")
-        print("  u - Update docstrings with LLM")
-        print("  q - Quit")
-
-        while True:
-            try:
-                action_input = input("\nSelect action: ").lower().strip()
-                if action_input == "q":
-                    print("👋 Goodbye!")
-                    sys.exit(0)
-                if action_input not in actions:
-                    print("❌ Invalid action. Use r, u, or q.")
-                    continue
-
-                return (
-                    actions[action_input],
-                    selected_file,
-                    DocstringForgeHandlers.get_output_directory(),
-                )
-            except KeyboardInterrupt:
-                print("\n👋 Goodbye!")
-                sys.exit(0)
+    def should_continue(self, state: dict) -> str:
+        if not state.get("continue_chatting", True):
+            return "end"
+        if state["iteration_count"] >= state["max_iterations"]:
+            return "end"
+        return "continue"
