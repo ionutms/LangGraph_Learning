@@ -107,6 +107,7 @@ class ChatbotApp:
             StateGraph: Compiled workflow.
         """
         workflow = StateGraph(AgentState)
+
         workflow.add_node("find_files", self.handler.find_files)
         workflow.add_node("select_file", self.handler.select_file)
         workflow.add_node("select_action", self.handler.select_action)
@@ -116,6 +117,7 @@ class ChatbotApp:
         workflow.add_node("process", self.handler.process_docstrings)
         workflow.add_node("llm", self.handler.llm_process)
         workflow.add_node("save", self.handler.save_result)
+
         workflow.add_edge(START, "find_files")
         workflow.add_edge("find_files", "select_file")
         workflow.add_edge("select_file", "select_action")
@@ -130,6 +132,7 @@ class ChatbotApp:
         workflow.add_edge("select_model", "llm")
         workflow.add_edge("llm", "save")
         workflow.add_edge("save", END)
+
         return workflow.compile()
 
     def run_interactive_mode(self):
