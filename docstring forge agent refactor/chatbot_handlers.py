@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 
-class ChatbotHandlers:
+class DocstringForgeHandlers:
     """Handle ChatbotApp workflow steps for file and docstring processing.
 
     Manages file selection, action selection, docstring processing,

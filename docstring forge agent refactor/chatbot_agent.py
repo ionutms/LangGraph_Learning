@@ -1,6 +1,6 @@
 from typing import Annotated, Optional
 
-from chatbot_handlers import ChatbotHandlers
+from chatbot_handlers import DocstringForgeHandlers
 from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -8,7 +8,6 @@ from typing_extensions import TypedDict
 
 load_dotenv()
 
-# Available LLM models
 LLM_MODELS = [
     "groq:llama-3.3-70b-versatile",
     "groq:deepseek-r1-distill-llama-70b",
@@ -16,7 +15,6 @@ LLM_MODELS = [
     "groq:moonshotai/kimi-k2-instruct",
 ]
 
-# LLM instructions for chatbot
 LLM_INSTRUCTIONS = """
 You are an expert Python docstring generator.
 - Improve or add docstrings in the provided Python code, following Google
@@ -32,18 +30,6 @@ Requirements:
 3. Use consistent formatting.
 4. Follow Google docstring style without examples.
 5. Ensure docstrings are added for undocumented functions/classes.
-
-Input Format:
-- Current docstrings found: {docstrings_info}
-- Original code:
-```python
-{original_code}
-```
-
-Output Format:
-- Return the complete updated Python code with improved/added docstrings.
-- Wrap the output in a single ```python code block.
-- Do not include other code blocks or markers.
 """
 
 
@@ -85,19 +71,19 @@ class AgentState(TypedDict):
     saved_file: str
 
 
-class ChatbotApp:
+class DocstringForge:
     """Chatbot app with docstring processing using LangGraph.
 
     Manages file selection, action selection, and docstring processing.
 
     Attributes:
         graph: Compiled LangGraph workflow.
-        handler: ChatbotHandlers instance.
+        handler: DocstringForgeHandlers instance.
     """
 
     def __init__(self):
-        """Initialize ChatbotApp."""
-        self.handler = ChatbotHandlers(LLM_INSTRUCTIONS, LLM_MODELS)
+        """Initialize DocstringForge."""
+        self.handler = DocstringForgeHandlers(LLM_INSTRUCTIONS, LLM_MODELS)
         self.graph = self.create_workflow()
 
     def create_workflow(self) -> StateGraph:
@@ -166,7 +152,7 @@ class ChatbotApp:
 
 
 if __name__ == "__main__":
-    app = ChatbotApp()
+    app = DocstringForge()
     print("Graph structure:")
     print(app.graph.get_graph().draw_ascii())
     print("\n" + "=" * 60 + "\n")
