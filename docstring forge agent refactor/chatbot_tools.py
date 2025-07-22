@@ -30,9 +30,9 @@ def model_selection_tool(
         while True:
             choice = input(f"\nSelect model (1-{len(models)}): ").strip()
             try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(models):
-                    selected = models[idx]
+                file_index = int(choice) - 1
+                if 0 <= file_index < len(models):
+                    selected = models[file_index]
                     print(f"\n🤖 Selected: {selected}")
                     print("=" * 60)
                     return {"selected_model": selected, "error": ""}
@@ -103,20 +103,15 @@ def select_file_tool(python_files: List[str]) -> Dict[str, Any]:
                 print(f"{i:2d}. {path}")
         print("-" * 50)
         while True:
-            inp = (
-                input(f"\nSelect file (1-{len(python_files)}) or q: ")
+            user_input = (
+                input(f"\nSelect file (1-{len(python_files)}): ")
                 .strip()
                 .lower()
             )
-            if inp == "q":
-                return {
-                    "selected_file": "",
-                    "error": "File selection cancelled",
-                }
             try:
-                idx = int(inp) - 1
-                if 0 <= idx < len(python_files):
-                    sel = python_files[idx]
+                file_index = int(user_input) - 1
+                if 0 <= file_index < len(python_files):
+                    sel = python_files[file_index]
                     try:
                         rel = Path(sel).relative_to(Path.cwd())
                         print(f"\n📁 Selected file: {rel}")

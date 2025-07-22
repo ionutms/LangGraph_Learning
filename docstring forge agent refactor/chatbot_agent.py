@@ -32,6 +32,8 @@ Requirements:
 5. Ensure docstrings are added for undocumented functions/classes.
 """
 
+MAX_ITERATIONS = 10
+
 
 class AgentState(TypedDict):
     """State for chatbot workflow.
@@ -69,6 +71,8 @@ class AgentState(TypedDict):
     docstring_info: list[dict]
     output_dir: str
     saved_file: str
+    iteration_count: int
+    max_iterations: int
 
 
 class DocstringForge:
@@ -103,6 +107,7 @@ class DocstringForge:
         workflow.add_node("process", self.handler.process_docstrings)
         workflow.add_node("llm", self.handler.llm_process)
         workflow.add_node("save", self.handler.save_result)
+        workflow.add_node("check_continue", self.handler.check_continue)
 
         workflow.add_edge(START, "find_files")
         workflow.add_edge("find_files", "select_file")
@@ -117,7 +122,12 @@ class DocstringForge:
         workflow.add_edge("analyze", "select_model")
         workflow.add_edge("select_model", "llm")
         workflow.add_edge("llm", "save")
-        workflow.add_edge("save", END)
+        workflow.add_edge("save", "check_continue")
+        workflow.add_conditional_edges(
+            "check_continue",
+            self.handler.should_continue,
+            {"continue": "find_files", "end": END},
+        )
 
         return workflow.compile()
 
@@ -141,9 +151,11 @@ class DocstringForge:
             "docstring_info": [],
             "output_dir": "",
             "saved_file": "",
+            "iteration_count": 0,
+            "max_iterations": MAX_ITERATIONS,
         }
         try:
-            self.graph.invoke(state)
+            self.graph.invoke(state, {"recursion_limit": 100})
             print("👋 Goodbye!")
         except KeyboardInterrupt:
             print("\n👋 Goodbye!")

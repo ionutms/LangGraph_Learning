@@ -40,15 +40,9 @@ class DocstringForgeHandlers:
         self.selected_model = ""
 
     def find_files(self, state: dict) -> dict:
-        """Find Python files in the current directory.
-
-        Args:
-            state: Agent state.
-
-        Returns:
-            dict: State with list of Python files.
-        """
         try:
+            state["iteration_count"] += 1
+            print(f"\n🔄 Iteration {state['iteration_count']}")
             result = find_python_files_tool.invoke({"directory": "."})
             if result["error"]:
                 state["error"] = result["error"]
@@ -121,27 +115,20 @@ class DocstringForgeHandlers:
         try:
             if state.get("error") or not state.get("selected_file"):
                 return state
-            actions = {"r": "remove", "u": "update", "q": "quit"}
+            actions = {"r": "remove", "u": "update"}
             print("\n🔧 Actions:")
             print("  r - Remove docstrings/comments")
             print("  u - Update docstrings with LLM")
-            print("  q - Quit")
             while True:
-                act = input("\nSelect action: ").lower().strip()
-                if act not in actions:
-                    print("❌ Invalid action. Use r, u, or q.")
+                user_input = input("\nSelect action: ").lower().strip()
+                if user_input not in actions:
+                    print("❌ Invalid action. Use r or u.")
                     continue
-                sel = actions[act]
-                if sel == "quit":
-                    state["continue_chatting"] = False
-                    state["messages"].append(
-                        AIMessage(content="User chose to quit")
-                    )
-                    return state
-                state["action"] = sel
+                selected_action = actions[user_input]
+                state["action"] = selected_action
                 state["output_dir"] = "processed_files"
                 state["messages"].append(
-                    AIMessage(content=f"Selected action: {sel}")
+                    AIMessage(content=f"Selected action: {selected_action}")
                 )
                 return state
         except KeyboardInterrupt:
@@ -315,7 +302,6 @@ class DocstringForgeHandlers:
                     else "None"
                     for d in state["docstring_info"]
                 ])
-                # Prepare prompt without requiring LLM initialization
                 state["messages"] = [
                     ("system", self.chat_prompt_template),
                     (
@@ -412,6 +398,33 @@ class DocstringForgeHandlers:
             state["messages"].append(AIMessage(content=f"Error: {e}"))
             return state
 
+    def check_continue(self, state: dict) -> dict:
+        try:
+            if not state.get("continue_chatting", True):
+                return state
+            if state["iteration_count"] >= state["max_iterations"]:
+                print(
+                    f"\n🔄 Max iterations ({state['max_iterations']}) reached"
+                )
+                state["continue_chatting"] = False
+                return state
+            print("\n🔄 Continue processing another file? (y/n): ", end="")
+            choice = input().strip().lower()
+            if choice in ["n", "no", "q", "quit"]:
+                state["continue_chatting"] = False
+            else:
+                state["error"] = None
+                state["selected_file"] = ""
+                state["action"] = None
+                state["original_code"] = ""
+                state["processed_code"] = ""
+                state["docstring_info"] = []
+                state["saved_file"] = ""
+            return state
+        except KeyboardInterrupt:
+            state["continue_chatting"] = False
+            return state
+
     def should_use_llm(self, state: dict) -> str:
         """Check if LLM processing is needed.
 
@@ -424,3 +437,10 @@ class DocstringForgeHandlers:
         if state.get("error"):
             return "skip_llm"
         return "use_llm" if state["action"] == "update" else "skip_llm"
+
+    def should_continue(self, state: dict) -> str:
+        if not state.get("continue_chatting", True):
+            return "end"
+        if state["iteration_count"] >= state["max_iterations"]:
+            return "end"
+        return "continue"
