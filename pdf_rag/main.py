@@ -1,68 +1,80 @@
-import os
+"""Main application for PDF question answering."""
 
-from dotenv import load_dotenv
+from typing import List
+
+from config import CHAT_TEMPLATE, Config
+from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from vector import retriever
 
-load_dotenv()
 
-model = ChatGroq(
-    groq_api_key=os.getenv("GROQ_API_KEY"),
-    model_name="llama-3.3-70b-versatile",
-)
+class PDFChatBot:
+    """PDF question answering chatbot."""
 
-template = """
-You are an expert assistant that answers questions based on the provided
-PDF documents.
+    def __init__(self) -> None:
+        self.model = ChatGroq(
+            groq_api_key=Config.GROQ_API_KEY,
+            model_name=Config.LLM_MODEL,
+        )
 
-Here are relevant excerpts from the documents: {context}
+        self.prompt = ChatPromptTemplate.from_template(CHAT_TEMPLATE)
+        self.chain = self.prompt | self.model
+        self.retriever = retriever
 
-Question: {question}
+    def format_docs(self, docs: List[Document]) -> str:
+        """Format retrieved documents for the prompt."""
+        formatted = []
+        for doc in docs:
+            source = doc.metadata.get("source_file", "Unknown")
+            page = doc.metadata.get("page", "Unknown")
+            content = doc.page_content.strip()
+            formatted.append(f"[Source: {source}, Page: {page}]\n{content}")
+        return "\n\n".join(formatted)
 
-Please provide a comprehensive answer based on the context above.
-If the answer cannot be found in the provided context, please say so.
-"""
+    def get_unique_sources(self, docs: List[Document]) -> List[str]:
+        """Get unique sources from retrieved documents."""
+        sources = set()
+        for doc in docs:
+            source_file = doc.metadata.get("source_file", "Unknown")
+            page = doc.metadata.get("page", "Unknown")
+            sources.add(f"- {source_file} (Page {page})")
+        return sorted(sources)
 
-prompt = ChatPromptTemplate.from_template(template)
-chain = prompt | model
+    def answer_question(self, question: str) -> tuple[str, List[str]]:
+        """Answer a question based on PDF content."""
+        # Retrieve relevant documents
+        docs = self.retriever.invoke(question)
+        context = self.format_docs(docs)
+
+        # Generate response
+        result = self.chain.invoke({"context": context, "question": question})
+
+        # Get sources
+        sources = self.get_unique_sources(docs)
+
+        return result.content, sources
+
+    def run_chat_loop(self) -> None:
+        """Run the main chat loop."""
+        print("PDF Question Answering System")
+        print("Type 'q' to quit")
+
+        while True:
+            print("\n" + "-" * 80)
+            question = input("Ask your question about the PDFs (q to quit): ")
+            print()
+
+            if question.lower() == "q":
+                break
+
+            answer, _ = self.answer_question(question)
+
+            print("Answer:")
+            print(answer)
+            print("\n" + "-" * 80)
 
 
-def format_docs(docs):
-    """Format retrieved documents for the prompt"""
-    formatted = []
-    for doc in docs:
-        source = doc.metadata.get("source_file", "Unknown")
-        page = doc.metadata.get("page", "Unknown")
-        content = doc.page_content.strip()
-        formatted.append(f"[Source: {source}, Page: {page}]\n{content}")
-    return "\n\n".join(formatted)
-
-
-while True:
-    print("\n" + "-" * 80)
-    question = input("Ask your question about the PDFs (q to quit): ")
-    print("\n")
-    if question == "q":
-        break
-
-    # Retrieve relevant documents
-    docs = retriever.invoke(question)
-    context = format_docs(docs)
-
-    # Generate response
-    result = chain.invoke({"context": context, "question": question})
-    print("Answer:")
-    print(result.content)
-
-    # Optionally show sources
-    print("\n" + "-" * 40)
-    print("Sources:")
-    sources = set()
-    for doc in docs:
-        source_file = doc.metadata.get("source_file", "Unknown")
-        page = doc.metadata.get("page", "Unknown")
-        sources.add(f"- {source_file} (Page {page})")
-
-    for source in sorted(sources):
-        print(source)
+if __name__ == "__main__":
+    chatbot = PDFChatBot()
+    chatbot.run_chat_loop()
