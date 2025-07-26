@@ -5,9 +5,9 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 
-df = pd.read_csv("./rag_agent/realistic_restaurant_reviews.csv")
+df = pd.read_csv("./local_rag_agent/realistic_restaurant_reviews.csv")
 
-db_location = "./rag_agent/chrome_langchain_db"
+db_location = "./local_rag_agent/chrome_langchain_db"
 
 add_documents = not os.path.exists(db_location)
 
