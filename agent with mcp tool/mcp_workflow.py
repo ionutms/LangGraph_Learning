@@ -1,12 +1,33 @@
 import asyncio
+from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 
 load_dotenv()
+
+first_server_path = Path(__file__).resolve().parent / "first_mcp_server.py"
+second_server_path = Path(__file__).resolve().parent / "second_mcp_server.py"
+
+
+@tool
+def divide(a: int, b: int) -> float:
+    """Divide two numbers.
+
+    Args:
+        a (int): First number (dividend).
+        b (int): Second number (divisor).
+
+    Returns:
+        float: Division of a by b.
+    """
+    if b == 0:
+        raise ValueError("Cannot divide by zero")
+    return a / b
 
 
 # Define the async main function to contain all await calls
@@ -18,22 +39,27 @@ async def main():
     client = MultiServerMCPClient({
         "math": {
             "command": "python",
-            "args": [
-                "C:/Users/Mihai_Ionut/Documents/GitHub/LangGraph_Learning/"
-                "chatbot agents/math_mcp_server.py"
-            ],
+            "args": [str(first_server_path)],
+            "transport": "stdio",
+        },
+        "math2": {
+            "command": "python",
+            "args": [str(second_server_path)],
             "transport": "stdio",
         },
     })
 
-    # Asynchronously get tools
-    tools = await client.get_tools()
+    # Asynchronously get tools from MCP servers
+    mcp_tools = await client.get_tools()
 
-    # Bind tools to model (assumed synchronous)
-    model_with_tools = model.bind_tools(tools)
+    # Combine MCP tools with local tools
+    all_tools = mcp_tools + [divide]
 
-    # Create ToolNode (synchronous)
-    tool_node = ToolNode(tools)
+    # Bind all tools to model
+    model_with_tools = model.bind_tools(all_tools)
+
+    # Create ToolNode with all tools
+    tool_node = ToolNode(all_tools)
 
     # Define should_continue function (synchronous)
     def should_continue(state: MessagesState):
@@ -66,7 +92,9 @@ async def main():
 
     # Test the graph asynchronously
     math_response = await graph.ainvoke({
-        "messages": [{"role": "user", "content": "what's (3 + 5) x 12?"}]
+        "messages": [
+            {"role": "user", "content": "what's ((3 + 5) x (12 - 8)) / 3?"}
+        ]
     })
 
     for msg in math_response["messages"]:
@@ -76,7 +104,7 @@ async def main():
                 for tool_call in msg.tool_calls:
                     print(
                         f"  Tool Call: {tool_call['name']} "
-                        f"with args {tool_call['args']}"
+                        f"with args: {tool_call['args']}"
                     )
         elif msg.type == "tool":
             print(f"Tool Response: {msg.content}")
