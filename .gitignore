@@ -163,3 +163,4 @@ cython_debug/
 *.bin
 *.json
 *.txt
+*.png
