@@ -19,10 +19,13 @@ class FileInfo(TypedDict):
 class Config:
     """Configuration constants."""
 
+    BASE_DIR = Path(__file__).parent
+
     # Directories
-    PDF_DIRECTORY = Path("./pdf_rag/pdfs")
-    DB_LOCATION = Path("./pdf_rag/pdf_rag_agent/chroma_langchain_db")
-    METADATA_FILE = Path("./pdf_rag/pdf_rag_agent/processed_files.json")
+    PDF_DIRECTORY = BASE_DIR / "pdfs"
+    DB_LOCATION = BASE_DIR / "chroma_langchain_db"
+    METADATA_FILE = BASE_DIR / "processed_files.json"
+    TABLES_DIRECTORY = BASE_DIR / "extracted_tables"
 
     # Text processing
     CHUNK_SIZE = 800
@@ -43,12 +46,13 @@ class Config:
         cls.PDF_DIRECTORY.mkdir(parents=True, exist_ok=True)
         cls.DB_LOCATION.parent.mkdir(parents=True, exist_ok=True)
         cls.METADATA_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cls.TABLES_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
 
 # Chat template
 CHAT_TEMPLATE = """
 You are an expert assistant that answers questions based on the provided
-PDF documents.
+PDF documents and their extracted tables.
 
 Here are relevant excerpts from the documents: {context}
 
@@ -56,4 +60,5 @@ Question: {question}
 
 Please provide a comprehensive answer based on the context above.
 If the answer cannot be found in the provided context, please say so.
+When referencing table data, be specific about which table and page.
 """

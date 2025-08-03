@@ -28,8 +28,16 @@ class PDFChatBot:
         for doc in docs:
             source = doc.metadata.get("source_file", "Unknown")
             page = doc.metadata.get("page", "Unknown")
+            content_type = doc.metadata.get("content_type", "text")
             content = doc.page_content.strip()
-            formatted.append(f"[Source: {source}, Page: {page}]\n{content}")
+
+            if content_type == "table":
+                table_idx = doc.metadata.get("table_index", "Unknown")
+                header = f"[Table {table_idx} from {source}, Page {page}]"
+            else:
+                header = f"[Source: {source}, Page: {page}]"
+
+            formatted.append(f"{header}\n{content}")
         return "\n\n".join(formatted)
 
     def get_unique_sources(self, docs: List[Document]) -> List[str]:
@@ -38,7 +46,17 @@ class PDFChatBot:
         for doc in docs:
             source_file = doc.metadata.get("source_file", "Unknown")
             page = doc.metadata.get("page", "Unknown")
-            sources.add(f"- {source_file} (Page {page})")
+            content_type = doc.metadata.get("content_type", "text")
+
+            if content_type == "table":
+                table_idx = doc.metadata.get("table_index", "Unknown")
+                source_str = (
+                    f"- {source_file} (Page {page}, Table {table_idx})"
+                )
+            else:
+                source_str = f"- {source_file} (Page {page})"
+
+            sources.add(source_str)
         return sorted(sources)
 
     def answer_question(self, question: str) -> tuple[str, List[str]]:
@@ -57,7 +75,7 @@ class PDFChatBot:
 
     def run_chat_loop(self) -> None:
         """Run the main chat loop."""
-        print("PDF Question Answering System")
+        print("PDF Question Answering System (with Table Support)")
         print("Type 'q' to quit")
 
         while True:
@@ -68,10 +86,16 @@ class PDFChatBot:
             if question.lower() == "q":
                 break
 
-            answer, _ = self.answer_question(question)
+            answer, sources = self.answer_question(question)
 
             print("Answer:")
             print(answer)
+
+            if sources:
+                print("\nSources:")
+                for source in sources:
+                    print(source)
+
             print("\n" + "-" * 80)
 
 

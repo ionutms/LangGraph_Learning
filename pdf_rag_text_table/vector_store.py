@@ -1,8 +1,10 @@
 """Vector store operations for PDF documents."""
 
+import csv
 from pathlib import Path
 from typing import Dict, List, Set
 
+import fitz  # PyMuPDF
 from config import Config, FileInfo
 from file_manager import FileManager
 from langchain_chroma import Chroma
@@ -93,9 +95,13 @@ class VectorStoreManager:
 
             print(f"Processing: {pdf_path.name}")
 
-            # Load and process PDF
+            # Load and process PDF text
             pdf_documents = self._load_pdf(pdf_path)
             documents.extend(pdf_documents)
+
+            # Extract and process tables
+            table_documents = self._extract_and_process_tables(pdf_path)
+            documents.extend(table_documents)
 
             # Update processed files tracking
             processed_files[file_key] = self.file_manager.get_file_info(
@@ -114,6 +120,124 @@ class VectorStoreManager:
         return self.vector_store.as_retriever(
             search_kwargs={"k": Config.RETRIEVAL_K}
         )
+
+    def _extract_table_data_from_pdf(self, pdf_path: str) -> List[Dict]:
+        """Extract table metadata and data from all pages of a PDF."""
+        extracted_tables = []
+
+        with fitz.open(pdf_path) as document:
+            for page_number in range(document.page_count):
+                page = document[page_number]
+
+                tables = page.find_tables()
+                for table_index, table in enumerate(tables):
+                    table_data = table.extract()
+                    num_rows = len(table_data)
+                    num_cols = len(table_data[0]) if table_data else 0
+
+                    table_info = {
+                        "page": page_number + 1,
+                        "table_index": table_index + 1,
+                        "bbox": [float(coord) for coord in table.bbox],
+                        "rows": num_rows,
+                        "cols": num_cols,
+                        "data": table_data,
+                    }
+                    extracted_tables.append(table_info)
+
+        return extracted_tables
+
+    def _format_table_as_text(self, table_data: List[List]) -> str:
+        """Format table data as structured text for embedding."""
+        if not table_data:
+            return ""
+
+        # Convert None values to empty strings
+        cleaned_data = []
+        for row in table_data:
+            cleaned_row = [
+                str(cell) if cell is not None else "" for cell in row
+            ]
+            cleaned_data.append(cleaned_row)
+
+        # Create text representation
+        text_lines = []
+        for i, row in enumerate(cleaned_data):
+            if i == 0:  # Header row
+                text_lines.append("Table Headers: " + " | ".join(row))
+                text_lines.append("-" * 40)
+            else:
+                text_lines.append("Row " + str(i) + ": " + " | ".join(row))
+
+        return "\n".join(text_lines)
+
+    def _save_table_to_csv(self, table_info: Dict, output_dir: Path) -> str:
+        """Save individual table to CSV file."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        page_num = table_info["page"]
+        table_idx = table_info["table_index"]
+        filename = f"page_{page_num}_table_{table_idx}.csv"
+        file_path = output_dir / filename
+
+        table_data = table_info["data"]
+        if table_data:
+            with open(file_path, "w", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                for row in table_data:
+                    cleaned_row = [
+                        str(cell) if cell is not None else "" for cell in row
+                    ]
+                    writer.writerow(cleaned_row)
+
+        return filename
+
+    def _extract_tables_as_documents(self, pdf_path: Path) -> List[Document]:
+        """Extract tables from PDF and return as Document objects."""
+        documents = []
+        tables = self._extract_table_data_from_pdf(str(pdf_path))
+
+        for table_info in tables:
+            if table_info["data"]:
+                # Format table as text
+                table_text = self._format_table_as_text(table_info["data"])
+
+                # Create document with table content
+                doc = Document(
+                    page_content=table_text,
+                    metadata={
+                        "source_file": pdf_path.name,
+                        "file_path": str(pdf_path),
+                        "page": table_info["page"],
+                        "table_index": table_info["table_index"],
+                        "content_type": "table",
+                        "rows": table_info["rows"],
+                        "cols": table_info["cols"],
+                        "bbox": str(table_info["bbox"]),  # Convert to string
+                    },
+                )
+                documents.append(doc)
+
+        return documents
+
+    def _extract_and_process_tables(self, pdf_path: Path) -> List[Document]:
+        """Extract tables from PDF and create table directory."""
+        # Create table output directory for this PDF
+        pdf_table_dir = Config.TABLES_DIRECTORY / pdf_path.stem
+        pdf_table_dir.mkdir(parents=True, exist_ok=True)
+
+        # Extract tables as documents
+        table_documents = self._extract_tables_as_documents(pdf_path)
+
+        # Also save tables as CSV files for reference
+        tables = self._extract_table_data_from_pdf(str(pdf_path))
+        for table_info in tables:
+            self._save_table_to_csv(table_info, pdf_table_dir)
+
+        if table_documents:
+            print(f"  Found {len(table_documents)} tables")
+
+        return table_documents
 
     def _find_ids_by_filenames(
         self, all_docs: dict, filenames: Set[str]
@@ -136,18 +260,64 @@ class VectorStoreManager:
         loader = PyPDFLoader(str(pdf_path))
         pdf_documents = loader.load()
 
-        # Add source filename to metadata
+        # Add source filename and content type to metadata
         for doc in pdf_documents:
             doc.metadata["source_file"] = pdf_path.name
             doc.metadata["file_path"] = str(pdf_path)
+            doc.metadata["content_type"] = "text"
 
         return pdf_documents
 
+    def _filter_metadata(self, metadata: dict) -> dict:
+        """Filter metadata to only include simple types for Chroma."""
+        filtered = {}
+        for key, value in metadata.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                filtered[key] = value
+            elif isinstance(value, list):
+                # Convert lists to strings
+                filtered[key] = str(value)
+            else:
+                # Convert other types to strings
+                filtered[key] = str(value)
+        return filtered
+
     def _split_and_add_documents(self, documents: List[Document]) -> None:
         """Split documents into chunks and add to vector store."""
-        print("Splitting documents into chunks...")
-        split_documents = self.text_splitter.split_documents(documents)
-        print(f"Created {len(split_documents)} document chunks")
+        # Separate text and table documents
+        text_docs = [
+            d for d in documents if d.metadata.get("content_type") == "text"
+        ]
+        table_docs = [
+            d for d in documents if d.metadata.get("content_type") == "table"
+        ]
+
+        all_chunks = []
+
+        # Split text documents
+        if text_docs:
+            print("Splitting text documents into chunks...")
+            text_chunks = self.text_splitter.split_documents(text_docs)
+            # Filter metadata from text chunks
+            for doc in text_chunks:
+                filtered_doc = Document(
+                    page_content=doc.page_content,
+                    metadata=self._filter_metadata(doc.metadata),
+                )
+                all_chunks.append(filtered_doc)
+
+        # Add table documents as-is (don't split them)
+        if table_docs:
+            print(f"Adding {len(table_docs)} table documents...")
+            # Filter metadata from table docs
+            for doc in table_docs:
+                filtered_doc = Document(
+                    page_content=doc.page_content,
+                    metadata=self._filter_metadata(doc.metadata),
+                )
+                all_chunks.append(filtered_doc)
+
+        print(f"Created {len(all_chunks)} document chunks total")
 
         print("Adding new/updated documents to vector store...")
-        self.vector_store.add_documents(documents=split_documents)
+        self.vector_store.add_documents(documents=all_chunks)
