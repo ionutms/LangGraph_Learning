@@ -25,9 +25,9 @@ class Config:
     METADATA_FILE = SCRIPT_DIR.joinpath("pdf_rag_agent/processed_files.json")
 
     # Text processing
-    CHUNK_SIZE = 1000
-    CHUNK_OVERLAP = 500
-    RETRIEVAL_K = 5
+    CHUNK_SIZE = 500
+    CHUNK_OVERLAP = 200
+    RETRIEVAL_K = 4
 
     # API keys
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -35,7 +35,10 @@ class Config:
 
     # Models
     LLM_MODEL = "llama-3.3-70b-versatile"
-    EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+    # EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+    # EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L12-v2"
+    EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 
     @classmethod
     def create_directories(cls) -> None:
