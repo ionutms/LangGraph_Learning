@@ -19,15 +19,15 @@ class FileInfo(TypedDict):
 class Config:
     """Configuration constants."""
 
-    # Directories
-    PDF_DIRECTORY = Path("./pdf_rag/pdfs")
-    DB_LOCATION = Path("./pdf_rag/pdf_rag_agent/chroma_langchain_db")
-    METADATA_FILE = Path("./pdf_rag/pdf_rag_agent/processed_files.json")
+    SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+    PDF_DIRECTORY = SCRIPT_DIR.joinpath("pdfs")
+    DB_LOCATION = SCRIPT_DIR.joinpath("pdf_rag_agent/chroma_langchain_db")
+    METADATA_FILE = SCRIPT_DIR.joinpath("pdf_rag_agent/processed_files.json")
 
     # Text processing
-    CHUNK_SIZE = 800
-    CHUNK_OVERLAP = 200
-    RETRIEVAL_K = 20
+    CHUNK_SIZE = 1000
+    CHUNK_OVERLAP = 500
+    RETRIEVAL_K = 5
 
     # API keys
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
